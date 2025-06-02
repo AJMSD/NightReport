@@ -2,6 +2,9 @@ import tkinter as tk
 from tkinter import ttk, messagebox, font
 from docx import Document
 from datetime import datetime
+import pandas as pd
+import os
+from openpyxl import load_workbook
 
 def configure_text_box(textbox, min_height=4):
     """Configure a text box to automatically resize based on content"""
@@ -831,6 +834,61 @@ def generate_report():
 
         filename = f"NightReport_{datetime.now().strftime('%Y-%m-%d_%H%M')}.docx"
         doc.save(filename)
+        # === Excel Tally Update ===
+        try:
+            tally_file = "NightReport_Tally.xlsx"
+            categories = [
+                "Building Traffic", "Mechanical/Repairs/Custodial", "Production Services",
+                "Patron Services", "Access/Lock/Unlock", "Cash Office", "Carding Runs",
+                "Terrace Traffic", "Terrace Enforcement", "Alumni Park", "Goodspeed Family Pier",
+                "Dining Service & Markets", "Hotel", "Miscellaneous"
+            ]
+            months = [
+                "January", "February", "March", "April", "May", "June",
+                "July", "August", "September", "October", "November", "December"
+            ]
+
+            # Load or create the Excel file
+            if os.path.exists(tally_file):
+                df = pd.read_excel(tally_file, index_col=0)
+            else:
+                df = pd.DataFrame(0, index=categories, columns=months)
+
+            # Extract month from the date field
+            user_date = entries["date"].get()
+            parsed_date = datetime.strptime(user_date, "%A, %B %d, %Y")
+            current_month = parsed_date.strftime("%B")
+
+            # Count notes
+            counts = {
+                "Building Traffic": sum(1 for box in building_traffic_boxes if box.get("1.0", "end").strip()),
+                "Mechanical/Repairs/Custodial": sum(1 for box in mechanical_boxes if box.get("1.0", "end").strip()),
+                "Production Services": sum(1 for box in production_notes if box.get("1.0", "end").strip()),
+                "Patron Services": sum(1 for box in patron_boxes if box.get("1.0", "end").strip()),
+                "Access/Lock/Unlock": 1 + sum(1 for box in access_note_boxes if box.get("1.0", "end").strip()),  # Always at least 1 dropdown result
+                "Cash Office": sum(1 for box in cash_boxes if box.get("1.0", "end").strip()),
+                "Carding Runs": sum(1 for box in carding_boxes if box.get("1.0", "end").strip()),
+                "Terrace Traffic": sum(1 for box in terrace_boxes if box.get("1.0", "end").strip()),
+                "Terrace Enforcement": sum(1 for box in enforcement_boxes if box.get("1.0", "end").strip()),
+                "Alumni Park": sum(1 for box in alumni_boxes if box.get("1.0", "end").strip()),
+                "Goodspeed Family Pier": sum(1 for box in pier_boxes if box.get("1.0", "end").strip()),
+                "Dining Service & Markets": sum(1 for box in dining_boxes if box.get("1.0", "end").strip()),
+                "Hotel": sum(1 for box in hotel_boxes if box.get("1.0", "end").strip()),
+                "Miscellaneous": sum(1 for box in misc_boxes if box.get("1.0", "end").strip())
+            }
+
+            for category, count in counts.items():
+                if category in df.index and current_month in df.columns:
+                    df.loc[category, current_month] += count
+            print("Debug: Building Traffic Box Content Count")
+            for box in building_traffic_boxes:
+                content = box.get("1.0", "end").strip()
+                print(f"Content: '{content}'")
+
+            df.to_excel(tally_file)
+
+        except Exception as e:
+            messagebox.showerror("Excel Error", f"Failed to update Excel tally: {e}")
         messagebox.showinfo("Success", f"Report saved as {filename}")
     except Exception as e:
         messagebox.showerror("Error", str(e))
