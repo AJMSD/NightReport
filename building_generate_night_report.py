@@ -187,6 +187,7 @@ mechanical_boxes = []
 production_notes = []
 decibel_entries = []
 patron_boxes = []
+patron_emergency_flags = []  # New list to store emergency flags for each patron box
 access_note_boxes = []
 cash_boxes = []
 dining_boxes = []
@@ -415,9 +416,45 @@ def setup_ui_components():
             textbox.insert("1.0", default_text)
         label.pack(anchor="w")
         textbox.pack(fill="both", expand=True, padx=5)
+        
+        # Emergency checkbox frame
+        emergency_frame = tk.Frame(frame, bg="black")
+        emergency_frame.pack(fill="x", padx=5, pady=(2, 5), anchor="w")
+        
+        # Medical emergency checkbox
+        med_var = tk.BooleanVar(value=False)
+        med_checkbox = tk.Checkbutton(
+            emergency_frame, 
+            text="Medical Emergency", 
+            variable=med_var, 
+            bg="black", 
+            fg="white", 
+            selectcolor="black",
+            font=("Helvetica", 10),
+            activebackground="black",
+            activeforeground="white"
+        )
+        med_checkbox.pack(side="left", padx=(0, 15))
+        
+        # Police emergency checkbox
+        police_var = tk.BooleanVar(value=False)
+        police_checkbox = tk.Checkbutton(
+            emergency_frame, 
+            text="Police Emergency", 
+            variable=police_var, 
+            bg="black", 
+            fg="white", 
+            selectcolor="black",
+            font=("Helvetica", 10),
+            activebackground="black",
+            activeforeground="white"
+        )
+        police_checkbox.pack(side="left")
+        
         frame.pack(pady=5, fill="x")
         configure_text_box(textbox, min_height=6)
         patron_boxes.append(textbox)
+        patron_emergency_flags.append({"medical": med_var, "police": police_var})
 
     # Add first required box
     add_patron_note_box()
@@ -818,6 +855,7 @@ def generate_report():
         for i, box in enumerate(patron_boxes, start=start_index):
             content = box.get("1.0", "end").strip()
             if content:
+                # Removed the emergency flags section - don't add text markers to the document
                 doc.add_paragraph(f"{i}. {content}")
 
         doc.add_paragraph("Access/Lock/Unlock")
@@ -952,14 +990,15 @@ def generate_report():
         
         # === Excel Tally Update - Now with separate files for each building ===
         try:
-            # Different tally files for each building
+            # Different tally file for each building
             tally_file = f"{building.replace(' ', '')}_NightReport_Tally.xlsx"
             
             # Define appropriate categories for each building
             common_categories = [
                 "Building Traffic", "Mechanical/Repairs/Custodial", "Production Services",
                 "Patron Services", "Access/Lock/Unlock", "Cash Office",
-                "Dining Service & Markets", "Hotel", "Miscellaneous"
+                "Dining Service & Markets", "Hotel", "Miscellaneous",
+                "Medical Emergencies", "Police Emergencies"  # Add emergency categories
             ]
             
             if building == "Memorial Union":
@@ -992,6 +1031,10 @@ def generate_report():
             parsed_date = datetime.strptime(user_date, "%A, %B %d, %Y")
             current_month = parsed_date.strftime("%B")
 
+            # Count medical and police emergencies
+            medical_emergency_count = sum(flags["medical"].get() for flags in patron_emergency_flags)
+            police_emergency_count = sum(flags["police"].get() for flags in patron_emergency_flags)
+
             # Count notes for the common categories
             counts = {
                 "Building Traffic": sum(1 for box in building_traffic_boxes if box.get("1.0", "end").strip()),
@@ -1002,7 +1045,9 @@ def generate_report():
                 "Cash Office": sum(1 for box in cash_boxes if box.get("1.0", "end").strip()),
                 "Dining Service & Markets": sum(1 for box in dining_boxes if box.get("1.0", "end").strip()),
                 "Hotel": sum(1 for box in hotel_boxes if box.get("1.0", "end").strip()),
-                "Miscellaneous": sum(1 for box in misc_boxes if box.get("1.0", "end").strip())
+                "Miscellaneous": sum(1 for box in misc_boxes if box.get("1.0", "end").strip()),
+                "Medical Emergencies": medical_emergency_count,  # Add medical emergency count
+                "Police Emergencies": police_emergency_count  # Add police emergency count
             }
             
             # Add Memorial Union specific counts
