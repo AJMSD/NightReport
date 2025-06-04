@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, font
 from docx import Document
+from docx.shared import Inches  # Add this import for better indentation control
 from datetime import datetime
 import pandas as pd
 import os
@@ -238,7 +239,7 @@ def configure_tabs_for_building():
         "Supervisor Info", "Building Traffic", "Mechanical", "Production", 
         "Patron Services", "Access", "Cash Office", "Carding Runs", 
         "Terrace Traffic", "Terrace Enforcement", "Alumni Park", "Goodspeed Pier",
-        "Dining & Markets", "Hotel", "Misc", "CSC Log"
+        "Dining & Markets", "Hotel", "Misc", "Security"  # Changed "CSC Log" to "Security"
     ]
     
     # Define the tabs to exclude for Union South
@@ -742,8 +743,8 @@ def setup_ui_components():
         bg="white", fg="black", font=("Helvetica", 10, "bold")
     ).pack(pady=10)
 
-    # === CSC Log Tab ===
-    csc_tab = tabs["CSC Log"]
+    # === Security Tab === (Changed from CSC Log)
+    csc_tab = tabs["Security"]  # Changed from "CSC Log"
     csc_frame = tk.Frame(csc_tab, bg="black")
     csc_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
 
@@ -791,53 +792,117 @@ def generate_report():
         doc = Document()
         # Include building name in the heading
         doc.add_heading(f'{building.upper()}\nBUILDING MANAGER\'S NIGHT REPORT', level=1)
-        doc.add_paragraph(f'Date: {entries["date"].get()}')
-        doc.add_paragraph(f'Shift Hours: {entries["shift_hours"].get()}')
-        doc.add_paragraph(f'Building Manager(s): {entries["bms"].get()}')
-        doc.add_paragraph(f'Event Manager(s): {entries["eventmanagers"].get()}')
-        doc.add_paragraph(f'Guest Service Specialist: {entries["gss"].get()}')
-        doc.add_paragraph(f'Custodial Supervisor(s): {entries["custodial"].get()}')
-        doc.add_paragraph(f'Production Supervisor(s): {entries["production"].get()}')
-        doc.add_paragraph(f'Retail & Dining Supervisor(s): {entries["retail"].get()}')
-        doc.add_paragraph(f'Catering Supervisor(s): {entries["catering"].get()}')
-        doc.add_paragraph(f'CAVR Desk Staff: {entries["cavr"].get()}')
+        
+        # Add bold paragraphs with regular user input
+        def add_bold_para_with_input(bold_text, user_input):
+            p = doc.add_paragraph()
+            p.add_run(f"{bold_text}: ").bold = True
+            p.add_run(user_input)
+        
+        add_bold_para_with_input("Date", entries["date"].get())
+        add_bold_para_with_input("Shift Hours", entries["shift_hours"].get())
+        add_bold_para_with_input("Building Manager(s)", entries["bms"].get())
+        add_bold_para_with_input("Event Manager(s)", entries["eventmanagers"].get())
+        add_bold_para_with_input("Guest Service Specialist", entries["gss"].get())
+        add_bold_para_with_input("Custodial Supervisor(s)", entries["custodial"].get())
+        add_bold_para_with_input("Production Supervisor(s)", entries["production"].get())
+        add_bold_para_with_input("Retail & Dining Supervisor(s)", entries["retail"].get())
+        add_bold_para_with_input("Catering Supervisor(s)", entries["catering"].get())
+        add_bold_para_with_input("CAVR Desk Staff", entries["cavr"].get())
 
-        doc.add_paragraph("\nNotes:")
-        doc.add_paragraph("Building Traffic")
+        # Bold section headers
+        p = doc.add_paragraph()
+        p.add_run("\nNotes:").bold = True
+        
+        def add_bold_section_header(text):
+            p = doc.add_paragraph()
+            p.add_run(text).bold = True
+            return p
+            
+        # Function to add indented paragraphs using Inches for better control
+        def add_indented_paragraph(number, content):
+            # Create a paragraph with the content and number
+            p = doc.add_paragraph("")
+            p.paragraph_format.left_indent = Inches(0.25)  # Change from 0.5 to 0.25 inch indent
+            
+            # Add the number with bold formatting
+            p.add_run(f"{number}. ").bold = True
+            
+            # Add the content directly
+            p.add_run(content)
+            
+            return p
 
-        for i, box in enumerate(building_traffic_boxes, start=1):
+        # Start a global counter for note numbering across all sections
+        note_counter = 1
+
+        add_bold_section_header("Building Traffic")
+        
+        # Add building traffic notes with global counter
+        has_traffic_notes = False
+        for box in building_traffic_boxes:
             content = box.get("1.0", "end").strip()
             if content:
-                doc.add_paragraph(f"{i}. {content}")
+                has_traffic_notes = True
+                add_indented_paragraph(note_counter, content)
+                note_counter += 1
+        
+        # Add an empty numbered note if no content
+        if not has_traffic_notes:
+            add_indented_paragraph(note_counter, "")
+            note_counter += 1
 
-        doc.add_paragraph("Mechanical/Repairs/Custodial")
-
-        start_index = len(building_traffic_boxes) + 1
-        for i, box in enumerate(mechanical_boxes, start=start_index):
+        add_bold_section_header("Mechanical/Repairs/Custodial")
+        
+        # Add mechanical notes with continuing counter
+        has_mechanical_notes = False
+        for box in mechanical_boxes:
             content = box.get("1.0", "end").strip()
             if content:
-                doc.add_paragraph(f"{i}. {content}")
+                has_mechanical_notes = True
+                add_indented_paragraph(note_counter, content)
+                note_counter += 1
+        
+        # Add an empty numbered note if no content
+        if not has_mechanical_notes:
+            add_indented_paragraph(note_counter, "")
+            note_counter += 1
 
-        doc.add_paragraph("Production Services (Meetings, Events, Set-ups, AV)")
-
-        start_index = len(building_traffic_boxes) + len(mechanical_boxes) + 1
-        for i, box in enumerate(production_notes, start=start_index):
+        add_bold_section_header("Production Services (Meetings, Events, Set-ups, AV)")
+        
+        # Add production notes with continuing counter
+        has_production_notes = False
+        for box in production_notes:
             content = box.get("1.0", "end").strip()
             if content:
-                doc.add_paragraph(f"{i}. {content}")
-
+                has_production_notes = True
+                add_indented_paragraph(note_counter, content)
+                note_counter += 1
+        
+        # Add an empty numbered note if no content
+        if not has_production_notes:
+            add_indented_paragraph(note_counter, "")
+            note_counter += 1
+            
+        # === Decibel reading and Security table modifications ===
+        
         if decibel_entries:
-            doc.add_paragraph("Decibel Readings:")
+            add_bold_section_header("Decibel Readings")
             # Create a table for decibel readings
             table = doc.add_table(rows=1, cols=3)
             table.style = 'Table Grid'
             
-            # Add header row
+            # Add header row - bold the headers
             header_cells = table.rows[0].cells
-            header_cells[0].text = "Time"
-            header_cells[1].text = "Reading (dB)"
-            header_cells[2].text = "Location"
+            header_cells[0].paragraphs[0].add_run("Time").bold = True
+            header_cells[1].paragraphs[0].add_run("Reading (dB)").bold = True
+            header_cells[2].paragraphs[0].add_run("Location").bold = True
             
+            # Center-align header cells
+            for cell in header_cells:
+                for paragraph in cell.paragraphs:
+                    paragraph.alignment = 1  # 1 = CENTER
+
             # Add data rows
             for time_entry, reading_entry, location_entry in decibel_entries:
                 time = time_entry.get().strip()
@@ -848,125 +913,258 @@ def generate_report():
                     row_cells[0].text = time
                     row_cells[1].text = reading
                     row_cells[2].text = location
+                    
+                    # Center-align all cells in this row
+                    for cell in row_cells:
+                        for paragraph in cell.paragraphs:
+                            paragraph.alignment = 1  # 1 = CENTER
 
-        doc.add_paragraph("Patron Services (Membership, Patron Assistance, Problem Patrons)")
-
-        start_index = len(building_traffic_boxes) + len(mechanical_boxes) + len(production_notes) + 1
-        for i, box in enumerate(patron_boxes, start=start_index):
+        add_bold_section_header("Patron Services (Membership, Patron Assistance, Problem Patrons)")
+        
+        # Add patron service notes with continuing counter
+        has_patron_notes = False
+        for box in patron_boxes:
             content = box.get("1.0", "end").strip()
             if content:
-                # Removed the emergency flags section - don't add text markers to the document
-                doc.add_paragraph(f"{i}. {content}")
+                has_patron_notes = True
+                add_indented_paragraph(note_counter, content)
+                note_counter += 1
+        
+        # Add an empty numbered note if no content
+        if not has_patron_notes:
+            add_indented_paragraph(note_counter, "")
+            note_counter += 1
 
-        doc.add_paragraph("Access/Lock/Unlock")
+        add_bold_section_header("Access/Lock/Unlock")
 
-        start_index = (
-            len(building_traffic_boxes)
-            + len(mechanical_boxes)
-            + len(production_notes)
-            + len(patron_boxes)
-            + 1
-        )
-
+        # Special case for access notes - bold the user input instead
         access_notes = [
-            f"At the early check, the loading dock arm gate was {access_inputs['early_gate'].get().lower()} at {access_inputs['early_time'].get()}.",
-            f"At the closing check, the loading dock arm gate was {access_inputs['close_gate'].get().lower()} at {access_inputs['close_time'].get()}.",
-            f"At the closing check, the HID scanners were {access_inputs['hid_status'].get().lower()}.",
-            f"I {access_inputs['door_status'].get().lower()} secured the loading dock overhead door for the night."
+            {
+                "text": f"At the early check, the loading dock arm gate was {access_inputs['early_gate'].get().lower()} at {access_inputs['early_time'].get()}.",
+                "bold_parts": [access_inputs['early_gate'].get().lower(), access_inputs['early_time'].get()]
+            },
+            {
+                "text": f"At the closing check, the loading dock arm gate was {access_inputs['close_gate'].get().lower()} at {access_inputs['close_time'].get()}.",
+                "bold_parts": [access_inputs['close_gate'].get().lower(), access_inputs['close_time'].get()]
+            },
+            {
+                "text": f"At the closing check, the HID scanners were {access_inputs['hid_status'].get().lower()}.",
+                "bold_parts": [access_inputs['hid_status'].get().lower()]
+            },
+            {
+                "text": f"I {access_inputs['door_status'].get().lower()} secured the loading dock overhead door for the night.",
+                "bold_parts": [access_inputs['door_status'].get().lower()]
+            }
         ]
 
-        # Auto-generated sentences
-        for i, sentence in enumerate(access_notes, start=start_index):
-            doc.add_paragraph(f"{i}. {sentence}")
-
+        # Auto-generated sentences with bold user inputs and continuing counter with indentation
+        for note_data in access_notes:
+            p = doc.add_paragraph("")
+            # Indent the entire paragraph using Inches
+            p.paragraph_format.left_indent = Inches(0.25)  # Change from 0.5 to 0.25
+            
+            # Add the number with bold formatting
+            p.add_run(f"{note_counter}. ").bold = True
+            
+            sentence = note_data["text"]
+            bold_parts = note_data["bold_parts"]
+            
+            current_pos = 0
+            for bold_part in bold_parts:
+                if bold_part in sentence[current_pos:]:
+                    # Find position of bold part
+                    part_pos = sentence.find(bold_part, current_pos)
+                    
+                    # Add text before the bold part
+                    if part_pos > current_pos:
+                        p.add_run(sentence[current_pos:part_pos])
+                    
+                    # Add the bold part
+                    p.add_run(bold_part).bold = True
+                    
+                    # Update position
+                    current_pos = part_pos + len(bold_part)
+            
+            # Add any remaining text after the last bold part
+            if current_pos < len(sentence):
+                p.add_run(sentence[current_pos:])
+                
+            note_counter += 1
+            
         # User-entered access notes
-        for j, box in enumerate(access_note_boxes):
+        for box in access_note_boxes:
             content = box.get("1.0", "end").strip()
             if content:
-                doc.add_paragraph(f"{start_index + len(access_notes) + j}. {content}")
+                add_indented_paragraph(note_counter, content)
+                note_counter += 1
 
-        doc.add_paragraph("Cash Office")
-
-        start_index += len(access_notes) + len(access_note_boxes)
-        for i, box in enumerate(cash_boxes, start=start_index):
+        add_bold_section_header("Cash Office")
+        
+        # Add cash office notes with continuing counter
+        has_cash_notes = False
+        for box in cash_boxes:
             content = box.get("1.0", "end").strip()
             if content:
-                doc.add_paragraph(f"{i}. {content}")
-        start_index += len(cash_boxes)
+                has_cash_notes = True
+                add_indented_paragraph(note_counter, content)
+                note_counter += 1
+        
+        # Add an empty numbered note if no content
+        if not has_cash_notes:
+            add_indented_paragraph(note_counter, "")
+            note_counter += 1
 
         # Only include Memorial Union specific sections if the building is Memorial Union
         if building == "Memorial Union":
-            doc.add_paragraph("Carding Runs")
-
-            for i, box in enumerate(carding_boxes, start=start_index):
+            add_bold_section_header("Carding Runs")
+            
+            # Add carding notes with continuing counter
+            has_carding_notes = False
+            for box in carding_boxes:
                 content = box.get("1.0", "end").strip()
                 if content:
-                    doc.add_paragraph(f"{i}. {content}")
-            start_index += len(carding_boxes)
+                    has_carding_notes = True
+                    add_indented_paragraph(note_counter, content)
+                    note_counter += 1
+            
+            # Add an empty numbered note if no content
+            if not has_carding_notes:
+                add_indented_paragraph(note_counter, "")
+                note_counter += 1
 
-            doc.add_paragraph("Terrace Traffic")
-            for i, box in enumerate(terrace_boxes, start=start_index):
+            add_bold_section_header("Terrace Traffic")
+            
+            # Add terrace traffic notes with continuing counter
+            has_terrace_notes = False
+            for box in terrace_boxes:
                 content = box.get("1.0", "end").strip()
                 if content:
-                    doc.add_paragraph(f"{i}. {content}")
-            start_index += len(terrace_boxes)
+                    has_terrace_notes = True
+                    add_indented_paragraph(note_counter, content)
+                    note_counter += 1
+            
+            # Add an empty numbered note if no content
+            if not has_terrace_notes:
+                add_indented_paragraph(note_counter, "")
+                note_counter += 1
 
-            doc.add_paragraph("Terrace Enforcement")
-            for i, box in enumerate(enforcement_boxes, start=start_index):
+            add_bold_section_header("Terrace Enforcement")
+            
+            # Add enforcement notes with continuing counter
+            has_enforcement_notes = False
+            for box in enforcement_boxes:
                 content = box.get("1.0", "end").strip()
                 if content:
-                    doc.add_paragraph(f"{i}. {content}")
-            start_index += len(enforcement_boxes)
+                    has_enforcement_notes = True
+                    add_indented_paragraph(note_counter, content)
+                    note_counter += 1
+            
+            # Add an empty numbered note if no content
+            if not has_enforcement_notes:
+                add_indented_paragraph(note_counter, "")
+                note_counter += 1
 
             # === Alumni Park ===
-            doc.add_paragraph("Alumni Park")
-            for i, box in enumerate(alumni_boxes, start=start_index):
+            add_bold_section_header("Alumni Park")
+            
+            # Add alumni park notes with continuing counter
+            has_alumni_notes = False
+            for box in alumni_boxes:
                 content = box.get("1.0", "end").strip()
                 if content:
-                    doc.add_paragraph(f"{i}. {content}")
-            start_index += len(alumni_boxes)
+                    has_alumni_notes = True
+                    add_indented_paragraph(note_counter, content)
+                    note_counter += 1
+            
+            # Add an empty numbered note if no content
+            if not has_alumni_notes:
+                add_indented_paragraph(note_counter, "")
+                note_counter += 1
 
             # === Goodspeed Family Pier ===
-            doc.add_paragraph("Goodspeed Family Pier")
-            for i, box in enumerate(pier_boxes, start=start_index):
+            add_bold_section_header("Goodspeed Family Pier")
+            
+            # Add pier notes with continuing counter
+            has_pier_notes = False
+            for box in pier_boxes:
                 content = box.get("1.0", "end").strip()
                 if content:
-                    doc.add_paragraph(f"{i}. {content}")
-            start_index += len(pier_boxes)
+                    has_pier_notes = True
+                    add_indented_paragraph(note_counter, content)
+                    note_counter += 1
+            
+            # Add an empty numbered note if no content
+            if not has_pier_notes:
+                add_indented_paragraph(note_counter, "")
+                note_counter += 1
 
         # === Dining Service & Markets ===
-        doc.add_paragraph("Dining Service & Markets")
-        for i, box in enumerate(dining_boxes, start=start_index):
+        add_bold_section_header("Dining Service & Markets")
+        
+        # Add dining notes with continuing counter
+        has_dining_notes = False
+        for box in dining_boxes:
             content = box.get("1.0", "end").strip()
             if content:
-                doc.add_paragraph(f"{i}. {content}")
-        start_index += len(dining_boxes)
+                has_dining_notes = True
+                add_indented_paragraph(note_counter, content)
+                note_counter += 1
+        
+        # Add an empty numbered note if no content
+        if not has_dining_notes:
+            add_indented_paragraph(note_counter, "")
+            note_counter += 1
 
         # === Hotel ===
-        doc.add_paragraph("Hotel")
-        for i, box in enumerate(hotel_boxes, start=start_index):
+        add_bold_section_header("Hotel")
+        
+        # Add hotel notes with continuing counter
+        has_hotel_notes = False
+        for box in hotel_boxes:
             content = box.get("1.0", "end").strip()
             if content:
-                doc.add_paragraph(f"{i}. {content}")
-        start_index += len(hotel_boxes)
+                has_hotel_notes = True
+                add_indented_paragraph(note_counter, content)
+                note_counter += 1
+        
+        # Add an empty numbered note if no content
+        if not has_hotel_notes:
+            add_indented_paragraph(note_counter, "")
+            note_counter += 1
 
         # === Miscellaneous ===
-        doc.add_paragraph("Miscellaneous")
-        for i, box in enumerate(misc_boxes, start=start_index):
+        add_bold_section_header("Miscellaneous")
+        
+        # Add miscellaneous notes with continuing counter
+        has_misc_notes = False
+        for box in misc_boxes:
             content = box.get("1.0", "end").strip()
             if content:
-                doc.add_paragraph(f"{i}. {content}")
-        start_index += len(misc_boxes)
+                has_misc_notes = True
+                add_indented_paragraph(note_counter, content)
+                note_counter += 1
+        
+        # Add an empty numbered note if no content
+        if not has_misc_notes:
+            add_indented_paragraph(note_counter, "")
+            note_counter += 1
 
-        # === CSC Log Section ===
-        doc.add_paragraph("CSC Log")
+        # === Security Section === (Changed from CSC Log)
+        add_bold_section_header("Security")  # Changed from "CSC Log"
 
         table = doc.add_table(rows=1, cols=3)
         table.style = 'Table Grid'
+        
         hdr_cells = table.rows[0].cells
-        hdr_cells[0].text = "Shift"
-        hdr_cells[1].text = "Staff Requested"
-        hdr_cells[2].text = "Staff Present"
+        # Bold the headers
+        hdr_cells[0].paragraphs[0].add_run("Shift").bold = True
+        hdr_cells[1].paragraphs[0].add_run("Staff Requested").bold = True
+        hdr_cells[2].paragraphs[0].add_run("Staff Present").bold = True
+        
+        # Center-align header cells
+        for cell in hdr_cells:
+            for paragraph in cell.paragraphs:
+                paragraph.alignment = 1  # 1 = CENTER
 
         for shift in csc_shifts:
             req_val = csc_entries[shift]["requested"].get().strip()
@@ -979,19 +1177,35 @@ def generate_report():
                 pres_display = f"{pres_val} ({names_val})"
 
             row = table.add_row().cells
-            row[0].text = shift
+            
+            # Bold the shift name - no tab character needed
+            shift_run = row[0].paragraphs[0].add_run(shift)
+            shift_run.bold = True
+            
+            # Set text directly
             row[1].text = req_val if req_val else "-"
             row[2].text = pres_display if pres_display else "-"
+            
+            # Center-align all cells in this row
+            for cell in row:
+                for paragraph in cell.paragraphs:
+                    paragraph.alignment = 1  # 1 = CENTER
 
         # Include building name in filename
         building_short = "MemU" if building == "Memorial Union" else "UnionS"
         filename = f"{building_short}_NightReport_{datetime.now().strftime('%Y-%m-%d_%H%M')}.docx"
         doc.save(filename)
         
-        # === Excel Tally Update - Now with separate files for each building ===
+        # === Excel Tally Update - Now with separate files for each building and year ===
         try:
-            # Different tally file for each building
-            tally_file = f"{building.replace(' ', '')}_NightReport_Tally.xlsx"
+            # Extract year from the date field
+            user_date = entries["date"].get()
+            parsed_date = datetime.strptime(user_date, "%A, %B %d, %Y")
+            current_year = parsed_date.strftime("%Y")
+            current_month = parsed_date.strftime("%B")
+            
+            # Include year in tally filename
+            tally_file = f"{building.replace(' ', '')}_{current_year}_NightReport_Tally.xlsx"
             
             # Define appropriate categories for each building
             common_categories = [
@@ -1014,7 +1228,7 @@ def generate_report():
                 "July", "August", "September", "October", "November", "December"
             ]
 
-            # Load or create the Excel file
+            # Load or create the Excel file for the current year
             if os.path.exists(tally_file):
                 df = pd.read_excel(tally_file, index_col=0)
                 
@@ -1025,11 +1239,6 @@ def generate_report():
                         df.loc[category] = [0] * len(df.columns)
             else:
                 df = pd.DataFrame(0, index=categories, columns=months)
-
-            # Extract month from the date field
-            user_date = entries["date"].get()
-            parsed_date = datetime.strptime(user_date, "%A, %B %d, %Y")
-            current_month = parsed_date.strftime("%B")
 
             # Count medical and police emergencies
             medical_emergency_count = sum(flags["medical"].get() for flags in patron_emergency_flags)
@@ -1046,8 +1255,9 @@ def generate_report():
                 "Dining Service & Markets": sum(1 for box in dining_boxes if box.get("1.0", "end").strip()),
                 "Hotel": sum(1 for box in hotel_boxes if box.get("1.0", "end").strip()),
                 "Miscellaneous": sum(1 for box in misc_boxes if box.get("1.0", "end").strip()),
-                "Medical Emergencies": medical_emergency_count,  # Add medical emergency count
-                "Police Emergencies": police_emergency_count  # Add police emergency count
+                "Medical Emergencies": medical_emergency_count,
+                "Police Emergencies": police_emergency_count,
+                "Security": 1
             }
             
             # Add Memorial Union specific counts
@@ -1065,7 +1275,7 @@ def generate_report():
                     df.loc[category, current_month] += count
             
             df.to_excel(tally_file)
-
+            
         except Exception as e:
             messagebox.showerror("Excel Error", f"Failed to update Excel tally: {e}")
         messagebox.showinfo("Success", f"Report saved as {filename}")
