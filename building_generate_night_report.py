@@ -14,11 +14,14 @@ def select_building():
     building_window = tk.Toplevel()
     building_window.title("Select Building")
     building_window.configure(bg="black")
-    building_window.geometry("400x250")
-    
-    # Make the window modal (blocks interaction with the parent window)
-    building_window.transient(root)
-    building_window.grab_set()
+    # Center the window on the screen
+    window_width = 400
+    window_height = 250
+    screen_width = building_window.winfo_screenwidth()
+    screen_height = building_window.winfo_screenheight()
+    x = int((screen_width / 2) - (window_width / 2))
+    y = int((screen_height / 2) - (window_height / 2))
+    building_window.geometry(f"{window_width}x{window_height}+{x}+{y}")
     
     label = tk.Label(
         building_window, 
@@ -170,7 +173,8 @@ def configure_text_box(textbox, min_height=4):
 root = tk.Tk()
 root.title("Night Report Generator")
 root.configure(bg="black")
-root.geometry("750x700")
+root.state('zoomed')  # Open in full screen
+# root.geometry("750x700")  # Remove fixed geometry
 root.withdraw()  # Hide the main window until building is selected
 
 # Global building variable
@@ -185,22 +189,62 @@ building_traffic_boxes = []
 
 # Add these global lists for all note sections
 mechanical_boxes = []
-production_notes = []
+mechanical_note_tags = []
+production_boxes = []
+production_note_tags = []
 decibel_entries = []
 patron_boxes = []
-patron_emergency_flags = []  # New list to store emergency flags for each patron box
+patron_note_tags = []
+patron_emergency_flags = []
 access_note_boxes = []
+access_note_tags = []
 cash_boxes = []
+cash_note_tags = []
 dining_boxes = []
+dining_note_tags = []
 hotel_boxes = []
 misc_boxes = []
+misc_note_tags = []
 
-# Add these only if you use them for Memorial Union-specific tabs
+# Memorial Union-specific
 carding_boxes = []
 terrace_boxes = []
+terrace_note_tags = []
 enforcement_boxes = []
+enforcement_note_tags = []
 alumni_boxes = []
+alumni_note_tags = []
 pier_boxes = []
+pier_note_tags = []
+
+# Tag options by tab (global)
+MECHANICAL_TAG_OPTIONS = ["None", "FAMIS report", "Door Lock Failure", "Reset Elevator", "Custodial Support"]
+PRODUCTION_TAG_OPTIONS = ["None", "Production Support", "AV Troubleshooting for Guest/Patron"]
+PATRON_TAG_OPTIONS = ["None", "Lost & Found support", "First Aid Kit", "Incident report", "No dog policy", "Confirmed service animal", "Ban patron encounter", "Repeat Offender Encounter", "Severe Disruption / Verbal Escalation", "Patron Subject to 24-Hour Ban", "UWPD/911 Called", "Non-Patron Escort / Trespass", "Ensure outside alcohol policy", "Enforce smoking policy", "Removed Bikes & electric transport", "Wellness Check", "Disability Assistance/Patron Support", "CESO Support/Wedding walkthrough", "Patron Services/inquires/General Assistance"]
+ACCESS_TAG_OPTIONS = ["None", "Loading dock access", "Employee Locker unlock", "Health Room unlock", "Door/cooler unlock"]
+CASH_TAG_OPTIONS = ["None", "Cash Equipment Jam", "Cash Machine Problem"]
+TERRACE_TAG_OPTIONS = ["None", "No dog policy", "Ensure outside alcohol policy & remove outside alcohol", "Enforce smoking policy", "Removed Bikes & electric transport", "Enforce no fishing policy", "Ban patron encounter", "Repeat Offender Encounter", "Confirmed service animal", "Wellness Check"]
+DINING_TAG_OPTIONS = ["None", "Catering Order Pickup/inquiry"]
+
+# Helper for adding tag dropdowns to a note (must be defined before use)
+def add_tagging_to_note(tag_frame, tag_options, tag_vars, tag_dropdowns):
+    def add_tag_dropdown():
+        var = tk.StringVar(value="None")
+        dropdown = ttk.Combobox(tag_frame, textvariable=var, values=tag_options, state="readonly", width=30)
+        dropdown.pack(side="left", padx=(0, 5))
+        tag_vars.append(var)
+        tag_dropdowns.append(dropdown)
+        def on_tag_change(event=None):
+            if var.get() != "None" and not hasattr(dropdown, 'add_tag_btn'):
+                add_btn = tk.Button(tag_frame, text="+ Add Tag", bg="white", fg="black", font=("Helvetica", 9, "bold"),
+                                   command=lambda: [add_tag_dropdown(), add_btn.destroy()])
+                add_btn.pack(side="left", padx=(0, 5))
+                dropdown.add_tag_btn = add_btn
+            elif var.get() == "None" and hasattr(dropdown, 'add_tag_btn'):
+                dropdown.add_tag_btn.destroy()
+                delattr(dropdown, 'add_tag_btn')
+        dropdown.bind("<<ComboboxSelected>>", on_tag_change)
+    add_tag_dropdown()
 
 # === Tabs ===
 notebook = ttk.Notebook(root)
@@ -327,9 +371,38 @@ def setup_ui_components():
             textbox.insert("1.0", default_text)
         label.pack(anchor="w")
         textbox.pack(fill="both", expand=True, padx=5)
-        frame.pack(pady=5, fill="x")
         configure_text_box(textbox)
         mechanical_boxes.append(textbox)
+
+        # Tagging logic
+        tag_vars = []  # List of tk.StringVar for this note
+        tag_dropdowns = []  # List of dropdown widgets for this note
+
+        tag_frame = tk.Frame(frame, bg="black")
+        tag_frame.pack(anchor="w", pady=(2, 0))
+
+        def add_tag_dropdown():
+            var = tk.StringVar(value="None")
+            dropdown = ttk.Combobox(tag_frame, textvariable=var, values=MECHANICAL_TAG_OPTIONS, state="readonly", width=22)
+            dropdown.pack(side="left", padx=(0, 5))
+            tag_vars.append(var)
+            tag_dropdowns.append(dropdown)
+
+            def on_tag_change(event=None):
+                # Show +Add Tag button if a valid tag is selected and no button exists
+                if var.get() != "None" and not hasattr(dropdown, 'add_tag_btn'):
+                    add_btn = tk.Button(tag_frame, text="+ Add Tag", bg="white", fg="black", font=("Helvetica", 9, "bold"),
+                                       command=lambda: [add_tag_dropdown(), add_btn.destroy()])
+                    add_btn.pack(side="left", padx=(0, 5))
+                    dropdown.add_tag_btn = add_btn
+                elif var.get() == "None" and hasattr(dropdown, 'add_tag_btn'):
+                    dropdown.add_tag_btn.destroy()
+                    delattr(dropdown, 'add_tag_btn')
+            dropdown.bind("<<ComboboxSelected>>", on_tag_change)
+
+        add_tag_dropdown()  # Add the first dropdown
+        mechanical_note_tags.append(tag_vars)
+        frame.pack(pady=5, fill="x")
 
     # Add first required box
     add_mechanical_box()
@@ -347,7 +420,7 @@ def setup_ui_components():
 
     def add_production_note_box(default_text=""):
         frame = tk.Frame(production_notes_frame, bg="black")
-        label = tk.Label(frame, text=f"Production Note #{len(production_notes)+1}:", fg="white", bg="black", font=label_font)
+        label = tk.Label(frame, text=f"Production Note #{len(production_boxes)+1}:", fg="white", bg="black", font=label_font)
         textbox = tk.Text(frame, height=4, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
         if default_text:
             textbox.insert("1.0", default_text)
@@ -355,7 +428,15 @@ def setup_ui_components():
         textbox.pack(fill="both", expand=True, padx=5)
         frame.pack(pady=5, fill="x")
         configure_text_box(textbox)
-        production_notes.append(textbox)
+        production_boxes.append(textbox)
+        # Tagging
+        tag_vars = []
+        tag_dropdowns = []
+        tag_frame = tk.Frame(frame, bg="black")
+        tag_frame.pack(anchor="w", pady=(2, 0))
+        add_tagging_to_note(tag_frame, PRODUCTION_TAG_OPTIONS, tag_vars, tag_dropdowns)
+        production_note_tags.append(tag_vars)
+        frame.pack(pady=5, fill="x")
 
     # Add first required note
     add_production_note_box()
@@ -417,45 +498,16 @@ def setup_ui_components():
             textbox.insert("1.0", default_text)
         label.pack(anchor="w")
         textbox.pack(fill="both", expand=True, padx=5)
-        
-        # Emergency checkbox frame
-        emergency_frame = tk.Frame(frame, bg="black")
-        emergency_frame.pack(fill="x", padx=5, pady=(2, 5), anchor="w")
-        
-        # Medical emergency checkbox
-        med_var = tk.BooleanVar(value=False)
-        med_checkbox = tk.Checkbutton(
-            emergency_frame, 
-            text="Medical Emergency", 
-            variable=med_var, 
-            bg="black", 
-            fg="white", 
-            selectcolor="black",
-            font=("Helvetica", 10),
-            activebackground="black",
-            activeforeground="white"
-        )
-        med_checkbox.pack(side="left", padx=(0, 15))
-        
-        # Police emergency checkbox
-        police_var = tk.BooleanVar(value=False)
-        police_checkbox = tk.Checkbutton(
-            emergency_frame, 
-            text="Police Emergency", 
-            variable=police_var, 
-            bg="black", 
-            fg="white", 
-            selectcolor="black",
-            font=("Helvetica", 10),
-            activebackground="black",
-            activeforeground="white"
-        )
-        police_checkbox.pack(side="left")
-        
-        frame.pack(pady=5, fill="x")
         configure_text_box(textbox, min_height=6)
         patron_boxes.append(textbox)
-        patron_emergency_flags.append({"medical": med_var, "police": police_var})
+        # Tagging
+        tag_vars = []
+        tag_dropdowns = []
+        tag_frame = tk.Frame(frame, bg="black")
+        tag_frame.pack(anchor="w", pady=(2, 0))
+        add_tagging_to_note(tag_frame, PATRON_TAG_OPTIONS, tag_vars, tag_dropdowns)
+        patron_note_tags.append(tag_vars)
+        frame.pack(pady=5, fill="x")
 
     # Add first required box
     add_patron_note_box()
@@ -520,6 +572,14 @@ def setup_ui_components():
         frame.pack(pady=5, fill="x")
         configure_text_box(textbox, min_height=3)
         access_note_boxes.append(textbox)
+        # Tagging
+        tag_vars = []
+        tag_dropdowns = []
+        tag_frame = tk.Frame(frame, bg="black")
+        tag_frame.pack(anchor="w", pady=(2, 0))
+        add_tagging_to_note(tag_frame, ACCESS_TAG_OPTIONS, tag_vars, tag_dropdowns)
+        access_note_tags.append(tag_vars)
+        frame.pack(pady=5, fill="x")
 
     # Add Note button
     add_note_btn = tk.Button(
@@ -543,6 +603,14 @@ def setup_ui_components():
         frame.pack(pady=5, fill="x")
         configure_text_box(textbox)
         cash_boxes.append(textbox)
+        # Tagging
+        tag_vars = []
+        tag_dropdowns = []
+        tag_frame = tk.Frame(frame, bg="black")
+        tag_frame.pack(anchor="w", pady=(2, 0))
+        add_tagging_to_note(tag_frame, CASH_TAG_OPTIONS, tag_vars, tag_dropdowns)
+        cash_note_tags.append(tag_vars)
+        frame.pack(pady=5, fill="x")
 
     add_cash_note_box()
 
@@ -595,7 +663,14 @@ def setup_ui_components():
             frame.pack(pady=5, fill="x")
             configure_text_box(textbox)
             terrace_boxes.append(textbox)
-
+            # Tagging
+            tag_vars = []
+            tag_dropdowns = []
+            tag_frame = tk.Frame(frame, bg="black")
+            tag_frame.pack(anchor="w", pady=(2, 0))
+            add_tagging_to_note(tag_frame, TERRACE_TAG_OPTIONS, tag_vars, tag_dropdowns)
+            terrace_note_tags.append(tag_vars)
+            frame.pack(pady=5, fill="x")
         add_terrace_note_box()
 
         add_terrace_btn = tk.Button(
@@ -619,7 +694,14 @@ def setup_ui_components():
             frame.pack(pady=5, fill="x")
             configure_text_box(textbox)
             enforcement_boxes.append(textbox)
-
+            # Tagging
+            tag_vars = []
+            tag_dropdowns = []
+            tag_frame = tk.Frame(frame, bg="black")
+            tag_frame.pack(anchor="w", pady=(2, 0))
+            add_tagging_to_note(tag_frame, TERRACE_TAG_OPTIONS, tag_vars, tag_dropdowns)
+            enforcement_note_tags.append(tag_vars)
+            frame.pack(pady=5, fill="x")
         add_enforcement_note_box()
 
         add_enforcement_btn = tk.Button(
@@ -643,7 +725,14 @@ def setup_ui_components():
             frame.pack(pady=5, fill="x")
             configure_text_box(textbox, min_height=3)
             alumni_boxes.append(textbox)
-
+            # Tagging
+            tag_vars = []
+            tag_dropdowns = []
+            tag_frame = tk.Frame(frame, bg="black")
+            tag_frame.pack(anchor="w", pady=(2, 0))
+            add_tagging_to_note(tag_frame, TERRACE_TAG_OPTIONS, tag_vars, tag_dropdowns)
+            alumni_note_tags.append(tag_vars)
+            frame.pack(pady=5, fill="x")
         add_alumni_note_box()
 
         tk.Button(
@@ -666,7 +755,14 @@ def setup_ui_components():
             frame.pack(pady=5, fill="x")
             configure_text_box(textbox, min_height=3)
             pier_boxes.append(textbox)
-
+            # Tagging
+            tag_vars = []
+            tag_dropdowns = []
+            tag_frame = tk.Frame(frame, bg="black")
+            tag_frame.pack(anchor="w", pady=(2, 0))
+            add_tagging_to_note(tag_frame, TERRACE_TAG_OPTIONS, tag_vars, tag_dropdowns)
+            pier_note_tags.append(tag_vars)
+            frame.pack(pady=5, fill="x")
         add_pier_note_box()
 
         tk.Button(
@@ -689,7 +785,14 @@ def setup_ui_components():
         frame.pack(pady=5, fill="x")
         configure_text_box(textbox)
         dining_boxes.append(textbox)
-
+        # Tagging
+        tag_vars = []
+        tag_dropdowns = []
+        tag_frame = tk.Frame(frame, bg="black")
+        tag_frame.pack(anchor="w", pady=(2, 0))
+        add_tagging_to_note(tag_frame, DINING_TAG_OPTIONS, tag_vars, tag_dropdowns)
+        dining_note_tags.append(tag_vars)
+        frame.pack(pady=5, fill="x")
     add_dining_note_box()
 
     tk.Button(
@@ -709,12 +812,10 @@ def setup_ui_components():
             textbox.insert("1.0", default_text)
         label.pack(anchor="w")
         textbox.pack(fill="both", expand=True, padx=5)
-        frame.pack(pady=5, fill="x")
         configure_text_box(textbox, min_height=3)
         hotel_boxes.append(textbox)
-
+        frame.pack(pady=5, fill="x")
     add_hotel_note_box()
-
     tk.Button(
         tabs["Hotel"], text="+ Add Note", command=add_hotel_note_box,
         bg="white", fg="black", font=("Helvetica", 10, "bold")
@@ -735,7 +836,7 @@ def setup_ui_components():
         frame.pack(pady=5, fill="x")
         configure_text_box(textbox)
         misc_boxes.append(textbox)
-
+        frame.pack(pady=5, fill="x")
     add_misc_note_box()
 
     tk.Button(
@@ -872,7 +973,7 @@ def generate_report():
         
         # Add production notes with continuing counter
         has_production_notes = False
-        for box in production_notes:
+        for box in production_boxes:
             content = box.get("1.0", "end").strip()
             if content:
                 has_production_notes = True
@@ -1191,94 +1292,171 @@ def generate_report():
                 for paragraph in cell.paragraphs:
                     paragraph.alignment = 1  # 1 = CENTER
 
-        # Include building name in filename
-        building_short = "MemU" if building == "Memorial Union" else "UnionS"
-        filename = f"{building_short}_NightReport_{datetime.now().strftime('%Y-%m-%d_%H%M')}.docx"
-        doc.save(filename)
+        # Save report as MM-DD-YY.docx in the correct folder only
+        user_date = entries["date"].get()
+        parsed_date = datetime.strptime(user_date, "%A, %B %d, %Y")
+        current_year = parsed_date.strftime("%Y")
+        # Create year and building folders if not exist
+        year_dir = os.path.join(os.getcwd(), current_year)
+        building_dir = os.path.join(year_dir, building)
+        os.makedirs(building_dir, exist_ok=True)
+        report_filename = f"{parsed_date.month}-{parsed_date.day}-{str(parsed_date.year)[2:]}.docx"
+        report_path = os.path.join(building_dir, report_filename)
+        doc.save(report_path)
         
-        # === Excel Tally Update - Now with separate files for each building and year ===
+        # === Excel Tally Update - Now with separate folders for each year and building ===
         try:
-            # Extract year from the date field
+            # Extract year and date for folder and filename
             user_date = entries["date"].get()
             parsed_date = datetime.strptime(user_date, "%A, %B %d, %Y")
             current_year = parsed_date.strftime("%Y")
             current_month = parsed_date.strftime("%B")
-            
-            # Include year in tally filename
-            tally_file = f"{building.replace(' ', '')}_{current_year}_NightReport_Tally.xlsx"
-            
-            # Define appropriate categories for each building
-            common_categories = [
-                "Building Traffic", "Mechanical/Repairs/Custodial", "Production Services",
-                "Patron Services", "Access/Lock/Unlock", "Cash Office",
-                "Dining Service & Markets", "Hotel", "Miscellaneous",
-                "Medical Emergencies", "Police Emergencies"  # Add emergency categories
-            ]
-            
-            if building == "Memorial Union":
-                categories = common_categories + [
-                    "Carding Runs", "Terrace Traffic", "Terrace Enforcement",
-                    "Alumni Park", "Goodspeed Family Pier"
-                ]
-            else:  # Union South
-                categories = common_categories
-                
+            # Build master tag set from all tab tag lists
+            master_tag_set = set()
+            for taglist in [MECHANICAL_TAG_OPTIONS, PRODUCTION_TAG_OPTIONS, PATRON_TAG_OPTIONS, ACCESS_TAG_OPTIONS, CASH_TAG_OPTIONS, DINING_TAG_OPTIONS, TERRACE_TAG_OPTIONS]:
+                master_tag_set.update(tag for tag in taglist if tag != "None")
+            # Add special-case tags
+            master_tag_set.add("Hotel Request")
+            master_tag_set.add("Carding Support/Lead Carding")
+            master_tag_set.add("Decibel checked")
+            master_tag_set.add("Patron Services/inquires/General Assistance")
+            categories = sorted(master_tag_set)
             months = [
                 "January", "February", "March", "April", "May", "June",
                 "July", "August", "September", "October", "November", "December"
             ]
-
-            # Load or create the Excel file for the current year
-            if os.path.exists(tally_file):
-                df = pd.read_excel(tally_file, index_col=0)
-                
-                # Check for new categories that may have been added since file was created
+            # Create year and building folders if not exist
+            year_dir = os.path.join(os.getcwd(), current_year)
+            building_dir = os.path.join(year_dir, building)
+            os.makedirs(building_dir, exist_ok=True)
+            # Save report as MM-DD-YY.docx
+            report_filename = f"{parsed_date.month}-{parsed_date.day}-{str(parsed_date.year)[2:]}.docx"
+            report_path = os.path.join(building_dir, report_filename)
+            doc.save(report_path)
+            # Save tally as building_Tally_YYYY.xlsx in building folder
+            building_short = "MU" if building == "Memorial Union" else "US"
+            tally_filename = f"{building_short}_Tally_{current_year}.xlsx"
+            tally_path = os.path.join(building_dir, tally_filename)
+            # Load or create the Excel file for the current year/building
+            if os.path.exists(tally_path):
+                df = pd.read_excel(tally_path, index_col=0)
                 for category in categories:
                     if category not in df.index:
-                        # Add missing category with zeros
                         df.loc[category] = [0] * len(df.columns)
+                # Remove any rows not in master list
+                for row in list(df.index):
+                    if row not in categories:
+                        df = df.drop(row)
             else:
                 df = pd.DataFrame(0, index=categories, columns=months)
-
-            # Count medical and police emergencies
-            medical_emergency_count = sum(flags["medical"].get() for flags in patron_emergency_flags)
-            police_emergency_count = sum(flags["police"].get() for flags in patron_emergency_flags)
-
-            # Count notes for the common categories
-            counts = {
-                "Building Traffic": sum(1 for box in building_traffic_boxes if box.get("1.0", "end").strip()),
-                "Mechanical/Repairs/Custodial": sum(1 for box in mechanical_boxes if box.get("1.0", "end").strip()),
-                "Production Services": sum(1 for box in production_notes if box.get("1.0", "end").strip()),
-                "Patron Services": sum(1 for box in patron_boxes if box.get("1.0", "end").strip()),
-                "Access/Lock/Unlock": 1 + sum(1 for box in access_note_boxes if box.get("1.0", "end").strip()),  # Always at least 1 dropdown result
-                "Cash Office": sum(1 for box in cash_boxes if box.get("1.0", "end").strip()),
-                "Dining Service & Markets": sum(1 for box in dining_boxes if box.get("1.0", "end").strip()),
-                "Hotel": sum(1 for box in hotel_boxes if box.get("1.0", "end").strip()),
-                "Miscellaneous": sum(1 for box in misc_boxes if box.get("1.0", "end").strip()),
-                "Medical Emergencies": medical_emergency_count,
-                "Police Emergencies": police_emergency_count,
-                "Security": 1
-            }
-            
-            # Add Memorial Union specific counts
-            if building == "Memorial Union":
-                counts.update({
-                    "Carding Runs": sum(1 for box in carding_boxes if box.get("1.0", "end").strip()),
-                    "Terrace Traffic": sum(1 for box in terrace_boxes if box.get("1.0", "end").strip()),
-                    "Terrace Enforcement": sum(1 for box in enforcement_boxes if box.get("1.0", "end").strip()),
-                    "Alumni Park": sum(1 for box in alumni_boxes if box.get("1.0", "end").strip()),
-                    "Goodspeed Family Pier": sum(1 for box in pier_boxes if box.get("1.0", "end").strip())
-                })
-
-            for category, count in counts.items():
+            # Tally tags for all notes
+            tag_counts = {cat: 0 for cat in categories}
+            # Mechanical
+            for tag_var_list, box in zip(mechanical_note_tags, mechanical_boxes):
+                content = box.get("1.0", "end").strip()
+                if not content:
+                    continue
+                tags = set(var.get() for var in tag_var_list if var.get() != "None")
+                for tag in tags:
+                    tag_counts[tag] += 1
+            # Production
+            for tag_var_list, box in zip(production_note_tags, production_boxes):
+                content = box.get("1.0", "end").strip()
+                if not content:
+                    continue
+                tags = set(var.get() for var in tag_var_list if var.get() != "None")
+                for tag in tags:
+                    tag_counts[tag] += 1
+            # Patron
+            for tag_var_list, box in zip(patron_note_tags, patron_boxes):
+                content = box.get("1.0", "end").strip()
+                if not content:
+                    continue
+                tags = set(var.get() for var in tag_var_list if var.get() != "None")
+                if tags:
+                    for tag in tags:
+                        tag_counts[tag] += 1
+                else:
+                    # If no tag but text, count as General Assistance
+                    tag_counts["Patron Services/inquires/General Assistance"] += 1
+            # Access
+            for tag_var_list, box in zip(access_note_tags, access_note_boxes):
+                content = box.get("1.0", "end").strip()
+                if not content:
+                    continue
+                tags = set(var.get() for var in tag_var_list if var.get() != "None")
+                for tag in tags:
+                    tag_counts[tag] += 1
+            # Cash
+            for tag_var_list, box in zip(cash_note_tags, cash_boxes):
+                content = box.get("1.0", "end").strip()
+                if not content:
+                    continue
+                tags = set(var.get() for var in tag_var_list if var.get() != "None")
+                for tag in tags:
+                    tag_counts[tag] += 1
+            # Dining
+            for tag_var_list, box in zip(dining_note_tags, dining_boxes):
+                content = box.get("1.0", "end").strip()
+                if not content:
+                    continue
+                tags = set(var.get() for var in tag_var_list if var.get() != "None")
+                for tag in tags:
+                    tag_counts[tag] += 1
+            # Terrace
+            for tag_var_list, box in zip(terrace_note_tags, terrace_boxes):
+                content = box.get("1.0", "end").strip()
+                if not content:
+                    continue
+                tags = set(var.get() for var in tag_var_list if var.get() != "None")
+                for tag in tags:
+                    tag_counts[tag] += 1
+            # Enforcement
+            for tag_var_list, box in zip(enforcement_note_tags, enforcement_boxes):
+                content = box.get("1.0", "end").strip()
+                if not content:
+                    continue
+                tags = set(var.get() for var in tag_var_list if var.get() != "None")
+                for tag in tags:
+                    tag_counts[tag] += 1
+            # Alumni
+            for tag_var_list, box in zip(alumni_note_tags, alumni_boxes):
+                content = box.get("1.0", "end").strip()
+                if not content:
+                    continue
+                tags = set(var.get() for var in tag_var_list if var.get() != "None")
+                for tag in tags:
+                    tag_counts[tag] += 1
+            # Pier
+            for tag_var_list, box in zip(pier_note_tags, pier_boxes):
+                content = box.get("1.0", "end").strip()
+                if not content:
+                    continue
+                tags = set(var.get() for var in tag_var_list if var.get() != "None")
+                for tag in tags:
+                    tag_counts[tag] += 1
+            # Hotel (special case)
+            for box in hotel_boxes:
+                content = box.get("1.0", "end").strip()
+                if content:
+                    tag_counts["Hotel Request"] += 1
+            # Carding (special case)
+            for box in carding_boxes:
+                content = box.get("1.0", "end").strip()
+                if content:
+                    tag_counts["Carding Support/Lead Carding"] += 1
+            # Decibel (special case)
+            if any(time.get().strip() and time.get().strip() != "Time" for time, _, _ in decibel_entries):
+                tag_counts["Decibel checked"] += 1
+            # Write tallies to Excel
+            for category, count in tag_counts.items():
                 if category in df.index and current_month in df.columns:
                     df.loc[category, current_month] += count
-            
-            df.to_excel(tally_file)
-            
+            df = df.loc[categories]  # Ensure order
+            df.to_excel(tally_path)
         except Exception as e:
             messagebox.showerror("Excel Error", f"Failed to update Excel tally: {e}")
-        messagebox.showinfo("Success", f"Report saved as {filename}")
+        messagebox.showinfo("Success", f"Report saved as {report_path}")
     except Exception as e:
         messagebox.showerror("Error", str(e))
 
