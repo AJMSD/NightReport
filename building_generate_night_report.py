@@ -1,7 +1,7 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, font
+from tkinter import ttk, messagebox, font, filedialog
 from docx import Document
-from docx.shared import Inches  # Add this import for better indentation control
+from docx.shared import Inches
 from datetime import datetime
 import pandas as pd
 import os
@@ -16,7 +16,7 @@ def select_building():
     building_window.configure(bg="black")
     # Center the window on the screen
     window_width = 400
-    window_height = 250
+    window_height = 350  # Increased height for Red Gym option
     screen_width = building_window.winfo_screenwidth()
     screen_height = building_window.winfo_screenheight()
     x = int((screen_width / 2) - (window_width / 2))
@@ -84,6 +84,24 @@ def select_building():
         activeforeground="white"
     )
     south_radio.pack(anchor=tk.W)
+    
+    # Red Gym Option
+    red_gym_frame = tk.Frame(building_window, bg="black", bd=2, relief=tk.RIDGE, padx=10, pady=10)
+    red_gym_frame.pack(fill=tk.X, padx=20, pady=5)
+    
+    red_gym_radio = tk.Radiobutton(
+        red_gym_frame,
+        text="Red Gym",
+        variable=selected_building,
+        value="Red Gym",
+        bg="black",
+        fg="white",
+        selectcolor="black",
+        font=("Helvetica", 12),
+        activebackground="black",
+        activeforeground="white"
+    )
+    red_gym_radio.pack(anchor=tk.W)
     
     # Confirm Button
     confirm_btn = tk.Button(
@@ -206,12 +224,26 @@ hotel_boxes = []
 misc_boxes = []
 misc_note_tags = []
 
+# Global variables for Security/CSC section
+csc_entries = {}
+csc_shifts = ["Morning", "Evening", "Special Event", "Chair Watch"]
+
+# Add these global variables for Red Gym after the existing global lists
+red_gym_building_tours_box = None
+red_gym_deviations_entry = None
+red_gym_deviation_boxes = []
+red_gym_door_check_time = None
+red_gym_door_check_day_type = None
+red_gym_mail_boxes = []
+red_gym_misc_boxes = []
+
 # Memorial Union-specific
 carding_boxes = []
 terrace_boxes = []
 terrace_note_tags = []
 enforcement_boxes = []
 enforcement_note_tags = []
+enforcement_images = []  # Add this for storing image paths
 alumni_boxes = []
 alumni_note_tags = []
 pier_boxes = []
@@ -225,6 +257,7 @@ ACCESS_TAG_OPTIONS = ["None", "Loading dock access", "Employee Locker unlock", "
 CASH_TAG_OPTIONS = ["None", "Cash Equipment Jam", "Cash Machine Problem"]
 TERRACE_TAG_OPTIONS = ["None", "No dog policy", "Ensure outside alcohol policy & remove outside alcohol", "Enforce smoking policy", "Removed Bikes & electric transport", "Enforce no fishing policy", "Ban patron encounter", "Repeat Offender Encounter", "Confirmed service animal", "Wellness Check"]
 DINING_TAG_OPTIONS = ["None", "Catering Order Pickup/inquiry"]
+RED_GYM_MISC_TAG_OPTIONS = ["None", "Physical Plant"]
 
 # Helper for adding tag dropdowns to a note (must be defined before use)
 def add_tagging_to_note(tag_frame, tag_options, tag_vars, tag_dropdowns):
@@ -283,19 +316,30 @@ def configure_tabs_for_building():
         "Supervisor Info", "Building Traffic", "Mechanical", "Production", 
         "Patron Services", "Access", "Cash Office", "Carding Runs", 
         "Terrace Traffic", "Terrace Enforcement", "Alumni Park", "Goodspeed Pier",
-        "Dining & Markets", "Hotel", "Misc", "Security"  # Changed "CSC Log" to "Security"
+        "Dining & Markets", "Hotel", "Misc", "Security"
     ]
     
-    # Define the tabs to exclude for Union South
+    # Define the tabs to exclude for different buildings
     exclude_for_union_south = [
         "Carding Runs", "Terrace Traffic", "Terrace Enforcement", 
-        "Alumni Park", "Goodspeed Pier"
+        "Alumni Park", "Goodspeed Pier", "Mail"
+    ]
+    
+    exclude_for_memorial_union = [
+        "Mail"
+    ]
+    
+    red_gym_tabs_only = [
+        "Supervisor Info", "Building Traffic", "Security", "Mail", "Misc"
     ]
     
     # Determine which tabs to create
-    tab_keys_to_create = all_tab_keys
-    if building == "Union South":
+    if building == "Red Gym":
+        tab_keys_to_create = red_gym_tabs_only
+    elif building == "Union South":
         tab_keys_to_create = [key for key in all_tab_keys if key not in exclude_for_union_south]
+    else:  # Memorial Union
+        tab_keys_to_create = [key for key in all_tab_keys if key not in exclude_for_memorial_union]
     
     # Create tabs
     tabs = {}
@@ -322,13 +366,20 @@ def setup_ui_components():
     add_labeled_entry(tabs["Supervisor Info"], "Date", "date", default=today_str)
     add_labeled_entry(tabs["Supervisor Info"], "Shift Hours", "shift_hours")
     add_labeled_entry(tabs["Supervisor Info"], "Building Manager(s)", "bms")
-    add_labeled_entry(tabs["Supervisor Info"], "Guest Service Specialist", "gss")
-    add_labeled_entry(tabs["Supervisor Info"], "Custodial Supervisor(s)", "custodial")
-    add_labeled_entry(tabs["Supervisor Info"], "Production Supervisor(s)", "production")
-    add_labeled_entry(tabs["Supervisor Info"], "Retail & Dining Supervisor(s)", "retail")
-    add_labeled_entry(tabs["Supervisor Info"], "Catering Supervisor(s)", "catering")
-    add_labeled_entry(tabs["Supervisor Info"], "Event Manager(s)", "eventmanagers")
-    add_labeled_entry(tabs["Supervisor Info"], "CAVR Desk Staff", "cavr")
+    
+    # Only add additional fields for Memorial Union and Union South
+    if building != "Red Gym":
+        # Terrace Manager(s) only for Memorial Union
+        if building == "Memorial Union":
+            add_labeled_entry(tabs["Supervisor Info"], "Terrace Manager(s)", "terrace_managers")
+        add_labeled_entry(tabs["Supervisor Info"], "Guest Service Specialist", "gss")
+        add_labeled_entry(tabs["Supervisor Info"], "Operation Manager(s)", "operation_managers")
+        add_labeled_entry(tabs["Supervisor Info"], "Custodial Supervisor(s)", "custodial")
+        add_labeled_entry(tabs["Supervisor Info"], "Production Supervisor(s)", "production")
+        add_labeled_entry(tabs["Supervisor Info"], "Retail & Dining Supervisor(s)", "retail")
+        add_labeled_entry(tabs["Supervisor Info"], "Catering Supervisor(s)", "catering")
+        add_labeled_entry(tabs["Supervisor Info"], "Event Manager(s)", "eventmanagers")
+        add_labeled_entry(tabs["Supervisor Info"], "CAVR Desk Staff", "cavr")
 
     # === Building Traffic Tab ===
     # Create a container frame inside the tab to hold text boxes
@@ -359,6 +410,162 @@ def setup_ui_components():
     )
     add_box_btn.pack(pady=10)
 
+    # Red Gym specific tabs
+    if building == "Red Gym":
+        # === Red Gym Security Tab ===
+        global red_gym_building_tours_box, red_gym_deviations_entry, red_gym_deviation_boxes
+        global red_gym_door_check_time, red_gym_door_check_day_type
+        
+        security_tab = tabs["Security"]
+        security_frame = tk.Frame(security_tab, bg="black")
+        security_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        # Building Tours
+        tours_label = tk.Label(security_frame, text="Building Tours:", fg="white", bg="black", font=label_font)
+        tours_label.pack(anchor="w")
+        red_gym_building_tours_box = tk.Text(security_frame, height=3, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
+        red_gym_building_tours_box.pack(fill="x", padx=5, pady=(0, 10))
+        configure_text_box(red_gym_building_tours_box, min_height=3)
+        
+        # Deviations section
+        deviations_label = tk.Label(security_frame, text="Deviations from standard building locking protocol:", fg="white", bg="black", font=label_font)
+        deviations_label.pack(anchor="w", pady=(10, 0))
+        
+        deviations_frame = tk.Frame(security_frame, bg="black")
+        deviations_frame.pack(fill="x", pady=5)
+        
+        deviations_text_label = tk.Label(deviations_frame, text="There were", fg="white", bg="black", font=label_font)
+        deviations_text_label.pack(side="left")
+        
+        red_gym_deviations_entry = tk.Entry(deviations_frame, width=5, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font)
+        red_gym_deviations_entry.insert(0, "0")
+        red_gym_deviations_entry.pack(side="left", padx=(5, 5))
+        
+        deviations_text_label2 = tk.Label(deviations_frame, text="deviations from the standard building locking protocol today.", fg="white", bg="black", font=label_font)
+        deviations_text_label2.pack(side="left")
+        
+        # Container for deviation notes
+        deviations_notes_frame = tk.Frame(security_frame, bg="black")
+        deviations_notes_frame.pack(fill="x", pady=5)
+        
+        def update_deviation_notes():
+            # Clear existing notes
+            for widget in deviations_notes_frame.winfo_children():
+                widget.destroy()
+            red_gym_deviation_boxes.clear()
+            
+            try:
+                num_deviations = int(red_gym_deviations_entry.get() or "0")
+                if num_deviations > 0:
+                    for i in range(num_deviations):
+                        frame = tk.Frame(deviations_notes_frame, bg="black")
+                        label = tk.Label(frame, text=f"Deviation {chr(97+i)}:", fg="white", bg="black", font=label_font)
+                        textbox = tk.Text(frame, height=2, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
+                        label.pack(anchor="w")
+                        textbox.pack(fill="x", padx=5)
+                        frame.pack(pady=2, fill="x")
+                        configure_text_box(textbox, min_height=2)
+                        red_gym_deviation_boxes.append(textbox)
+            except ValueError:
+                pass
+        
+        red_gym_deviations_entry.bind('<KeyRelease>', lambda e: update_deviation_notes())
+        
+        # Door check section
+        door_check_frame = tk.Frame(security_frame, bg="black")
+        door_check_frame.pack(fill="x", pady=(20, 5))
+        
+        door_check_label1 = tk.Label(door_check_frame, text="I checked to confirm that the Building Doors were locked and the door swipe scanner was red at", fg="white", bg="black", font=label_font)
+        door_check_label1.pack(side="left")
+        
+        red_gym_door_check_time = tk.Entry(door_check_frame, width=10, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font)
+        red_gym_door_check_time.pack(side="left", padx=(5, 5))
+        
+        door_check_label2 = tk.Label(door_check_frame, text="on a", fg="white", bg="black", font=label_font)
+        door_check_label2.pack(side="left")
+        
+        red_gym_door_check_day_type = ttk.Combobox(door_check_frame, values=["weekday", "weekend"], state="readonly", width=10)
+        red_gym_door_check_day_type.pack(side="left", padx=(5, 0))
+        
+        door_check_label3 = tk.Label(door_check_frame, text=".", fg="white", bg="black", font=label_font)
+        door_check_label3.pack(side="left")
+        
+        # === Red Gym Mail Tab ===
+        global red_gym_mail_boxes
+        mail_tab = tabs["Mail"]
+        mail_frame = tk.Frame(mail_tab, bg="black")
+        mail_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
+        
+        def add_red_gym_mail_box(default_text=""):
+            frame = tk.Frame(mail_frame, bg="black")
+            label = tk.Label(frame, text=f"Mail Note #{len(red_gym_mail_boxes)+1}:", fg="white", bg="black", font=label_font)
+            textbox = tk.Text(frame, height=3, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
+            if default_text:
+                textbox.insert("1.0", default_text)
+            label.pack(anchor="w")
+            textbox.pack(fill="both", expand=True, padx=5)
+            frame.pack(pady=5, fill="x")
+            configure_text_box(textbox, min_height=3)
+            red_gym_mail_boxes.append(textbox)
+        
+        add_red_gym_mail_box()
+        
+        tk.Button(
+            mail_tab, text="+ Add Note", command=add_red_gym_mail_box,
+            bg="white", fg="black", font=("Helvetica", 10, "bold")
+        ).pack(pady=10)
+        
+        # === Red Gym Misc Tab ===
+        global red_gym_misc_boxes
+        misc_tab = tabs["Misc"]
+        misc_frame = tk.Frame(misc_tab, bg="black")
+        misc_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
+        
+        def add_red_gym_misc_box(default_text=""):
+            frame = tk.Frame(misc_frame, bg="black")
+            label = tk.Label(frame, text=f"Misc Note #{len(red_gym_misc_boxes)+1}:", fg="white", bg="black", font=label_font)
+            textbox = tk.Text(frame, height=3, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
+            if default_text:
+                textbox.insert("1.0", default_text)
+            label.pack(anchor="w")
+            textbox.pack(fill="both", expand=True, padx=5)
+            frame.pack(pady=5, fill="x")
+            configure_text_box(textbox, min_height=3)
+            red_gym_misc_boxes.append(textbox)
+            
+            # Tagging for Red Gym misc (single dropdown only)
+            tag_vars = []
+            tag_dropdowns = []
+            tag_frame = tk.Frame(frame, bg="black")
+            tag_frame.pack(anchor="w", pady=(2, 0))
+            
+            # Add single dropdown without the ability to add more
+            var = tk.StringVar(value="None")
+            dropdown = ttk.Combobox(tag_frame, textvariable=var, values=RED_GYM_MISC_TAG_OPTIONS, state="readonly", width=30)
+            dropdown.pack(side="left", padx=(0, 5))
+            tag_vars.append(var)
+            tag_dropdowns.append(dropdown)
+            
+            misc_note_tags.append(tag_vars)
+            frame.pack(pady=5, fill="x")
+        
+        add_red_gym_misc_box()
+        
+        tk.Button(
+            misc_tab, text="+ Add Note", command=add_red_gym_misc_box,
+            bg="white", fg="black", font=("Helvetica", 10, "bold")
+        ).pack(pady=10)
+        
+        # === Generate Report Button ===
+        submit_btn = tk.Button(
+            root, text="Generate Report", command=generate_report,
+            bg="white", fg="black", font=("Helvetica", 12, "bold"), padx=10, pady=6
+        )
+        submit_btn.pack(pady=10)
+        
+        return  # Exit early for Red Gym
+    
+    # Continue with existing code for Memorial Union and Union South
     # === Mechanical/Repairs/Custodial Tab ===
     mechanical_notes_frame = tk.Frame(tabs["Mechanical"], bg="black")
     mechanical_notes_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
@@ -469,6 +676,14 @@ def setup_ui_components():
         reading_entry.insert(0, "Reading (db)")
         location_entry.insert(0, "Location")
 
+        # Add focus event handlers to select all text when clicked
+        def on_focus_in(event):
+            event.widget.select_range(0, tk.END)
+            
+        time_entry.bind("<FocusIn>", on_focus_in)
+        reading_entry.bind("<FocusIn>", on_focus_in)
+        location_entry.bind("<FocusIn>", on_focus_in)
+
         time_entry.pack(side="left", padx=5)
         reading_entry.pack(side="left", padx=5)
         location_entry.pack(side="left", padx=5)
@@ -554,7 +769,12 @@ def setup_ui_components():
     add_entry("Time of Closing Check:", "close_time")
 
     add_dropdown("HID Scanners Status at Close:", "hid_status", ["Locked", "Unlocked"])
-    add_dropdown("Overhead Door Secured:", "door_status", ["Successfully", "Unsuccessfully"])
+    
+    # Set default based on building type
+    if building == "Memorial Union":
+        add_dropdown("Overhead Door Secured:", "door_status", ["Unsuccessfully", "Successfully"])
+    else:  # Union South and other buildings
+        add_dropdown("Overhead Door Secured:", "door_status", ["Successfully", "Unsuccessfully"])
 
     # === Optional Access Notes ===
     access_notes_label = tk.Label(access_frame, text="Additional Access Notes (Optional):", fg="white", bg="black", font=label_font)
@@ -683,6 +903,66 @@ def setup_ui_components():
         enforcement_frame = tk.Frame(tabs["Terrace Enforcement"], bg="black")
         enforcement_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
 
+        # Keep track of enforcement components for proper ordering
+        enforcement_components = []
+
+        def add_enforcement_image():
+            image_frame = tk.Frame(enforcement_frame, bg="black")
+            
+            # Label for the image section
+            image_label = tk.Label(image_frame, text=f"Enforcement Image #{len(enforcement_images)+1}:", fg="white", bg="black", font=label_font)
+            image_label.pack(anchor="w")
+            
+            # Frame for image upload button and status
+            upload_frame = tk.Frame(image_frame, bg="black")
+            upload_frame.pack(fill="x", pady=2)
+            
+            # Variable to store image path
+            image_path_var = tk.StringVar()
+            enforcement_images.insert(0, image_path_var)  # Insert at beginning
+            
+            # Status label
+            status_label = tk.Label(upload_frame, text="No image selected", fg="gray", bg="black", font=entry_font)
+            status_label.pack(side="left", padx=(0, 10))
+            
+            def select_image():
+                file_path = filedialog.askopenfilename(
+                    title="Select Image",
+                    filetypes=[
+                        ("Image files", "*.jpg *.jpeg *.png *.gif *.bmp"),
+                        ("All files", "*.*")
+                    ]
+                )
+                if file_path:
+                    image_path_var.set(file_path)
+                    filename = file_path.split('/')[-1]  # Get just the filename
+                    status_label.config(text=f"Selected: {filename}", fg="white")
+            
+            upload_btn = tk.Button(upload_frame, text="Select Image", command=select_image,
+                                 bg="white", fg="black", font=("Helvetica", 9, "bold"))
+            upload_btn.pack(side="left")
+            
+            # Text box for image description
+            desc_label = tk.Label(image_frame, text="Description of enforcement action:", fg="white", bg="black", font=label_font)
+            desc_label.pack(anchor="w", pady=(5, 0))
+            
+            textbox = tk.Text(image_frame, height=3, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
+            textbox.pack(fill="x", padx=5)
+            configure_text_box(textbox, min_height=3)
+            enforcement_boxes.insert(0, textbox)  # Insert at beginning
+            
+            # Tagging
+            tag_vars = []
+            tag_dropdowns = []
+            tag_frame = tk.Frame(image_frame, bg="black")
+            tag_frame.pack(anchor="w", pady=(2, 0))
+            add_tagging_to_note(tag_frame, TERRACE_TAG_OPTIONS, tag_vars, tag_dropdowns)
+            enforcement_note_tags.insert(0, tag_vars)  # Insert at beginning
+            
+            # Pack the image frame and reorder all components
+            enforcement_components.insert(0, image_frame)
+            reorder_enforcement_components()
+
         def add_enforcement_note_box(default_text=""):
             frame = tk.Frame(enforcement_frame, bg="black")
             label = tk.Label(frame, text=f"Enforcement Note #{len(enforcement_boxes)+1}:", fg="white", bg="black", font=label_font)
@@ -691,7 +971,6 @@ def setup_ui_components():
                 textbox.insert("1.0", default_text)
             label.pack(anchor="w")
             textbox.pack(fill="both", expand=True, padx=5)
-            frame.pack(pady=5, fill="x")
             configure_text_box(textbox)
             enforcement_boxes.append(textbox)
             # Tagging
@@ -701,7 +980,26 @@ def setup_ui_components():
             tag_frame.pack(anchor="w", pady=(2, 0))
             add_tagging_to_note(tag_frame, TERRACE_TAG_OPTIONS, tag_vars, tag_dropdowns)
             enforcement_note_tags.append(tag_vars)
-            frame.pack(pady=5, fill="x")
+            
+            # Add to components and reorder
+            enforcement_components.append(frame)
+            reorder_enforcement_components()
+
+        def reorder_enforcement_components():
+            # Forget all components
+            for component in enforcement_components:
+                component.pack_forget()
+            # Re-pack in correct order
+            for component in enforcement_components:
+                component.pack(fill="x", pady=5)
+
+        # Button to add enforcement image with description
+        add_image_btn = tk.Button(
+            enforcement_frame, text="+ Add Enforcement Image", command=add_enforcement_image,
+            bg="white", fg="black", font=("Helvetica", 10, "bold")
+        )
+        add_image_btn.pack(pady=5)
+
         add_enforcement_note_box()
 
         add_enforcement_btn = tk.Button(
@@ -849,9 +1147,7 @@ def setup_ui_components():
     csc_frame = tk.Frame(csc_tab, bg="black")
     csc_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
 
-    csc_entries = {}
-    csc_shifts = ["Morning", "Evening", "Special Event", "Chair Watch"]
-
+    # Remove the local csc_entries and csc_shifts declarations since they're now global
     for shift in csc_shifts:
         section = tk.LabelFrame(csc_frame, text=shift, fg="white", bg="black", font=label_font, labelanchor="n", padx=10, pady=10)
         section.pack(fill="x", pady=5)
@@ -903,396 +1199,722 @@ def generate_report():
         add_bold_para_with_input("Date", entries["date"].get())
         add_bold_para_with_input("Shift Hours", entries["shift_hours"].get())
         add_bold_para_with_input("Building Manager(s)", entries["bms"].get())
-        add_bold_para_with_input("Event Manager(s)", entries["eventmanagers"].get())
-        add_bold_para_with_input("Guest Service Specialist", entries["gss"].get())
-        add_bold_para_with_input("Custodial Supervisor(s)", entries["custodial"].get())
-        add_bold_para_with_input("Production Supervisor(s)", entries["production"].get())
-        add_bold_para_with_input("Retail & Dining Supervisor(s)", entries["retail"].get())
-        add_bold_para_with_input("Catering Supervisor(s)", entries["catering"].get())
-        add_bold_para_with_input("CAVR Desk Staff", entries["cavr"].get())
-
-        # Bold section headers
-        p = doc.add_paragraph()
-        p.add_run("\nNotes:").bold = True
         
-        def add_bold_section_header(text):
+        # Red Gym specific report format
+        if building == "Red Gym":
+            # Bold section headers
             p = doc.add_paragraph()
-            p.add_run(text).bold = True
-            return p
+            p.add_run("\nNotes:").bold = True
             
-        # Function to add indented paragraphs using Inches for better control
-        def add_indented_paragraph(number, content):
-            # Create a paragraph with the content and number
+            def add_bold_section_header(text):
+                p = doc.add_paragraph()
+                p.add_run(text).bold = True
+                return p
+                
+            # Function to add indented paragraphs using Inches for better control
+            def add_indented_paragraph(number, content):
+                p = doc.add_paragraph("")
+                p.paragraph_format.left_indent = Inches(0.25)
+                p.add_run(f"{number}. ").bold = True
+                p.add_run(content)
+                return p
+            
+            def add_sub_indented_paragraph(letter, content):
+                p = doc.add_paragraph("")
+                p.paragraph_format.left_indent = Inches(0.75)
+                p.add_run(f"{letter}. ").bold = True
+                p.add_run(content)
+                return p
+
+            note_counter = 1
+
+            # Building Traffic
+            add_bold_section_header("Building Traffic")
+            has_traffic_notes = False
+            for box in building_traffic_boxes:
+                content = box.get("1.0", "end").strip()
+                if content:
+                    has_traffic_notes = True
+                    add_indented_paragraph(note_counter, content)
+                    note_counter += 1
+            
+            if not has_traffic_notes:
+                add_indented_paragraph(note_counter, "")
+                note_counter += 1
+
+            # Security
+            add_bold_section_header("Security")
+            
+            # Building Tours
+            tours_content = red_gym_building_tours_box.get("1.0", "end").strip()
+            tours_text = f"Building Tours: {tours_content}" if tours_content else "Building Tours:"
+            add_indented_paragraph(note_counter, tours_text)
+            note_counter += 1
+            
+            # Deviations
+            num_deviations = int(red_gym_deviations_entry.get() or "0")
+            deviation_text = f"There were {num_deviations} deviations from the standard building locking protocol today."
+            
+            # Create paragraph for deviations with bold formatting
             p = doc.add_paragraph("")
-            p.paragraph_format.left_indent = Inches(0.25)  # Change from 0.5 to 0.25 inch indent
+            p.paragraph_format.left_indent = Inches(0.25)
+            p.add_run(f"{note_counter}. ").bold = True
+            p.add_run("There were ")
+            p.add_run(str(num_deviations)).bold = True
+            p.add_run(" deviations from the standard building locking protocol today.")
             
-            # Add the number with bold formatting
-            p.add_run(f"{number}. ").bold = True
+            if num_deviations > 0:
+                for i, box in enumerate(red_gym_deviation_boxes):
+                    content = box.get("1.0", "end").strip()
+                    letter = chr(97 + i)  # a, b, c, etc.
+                    add_sub_indented_paragraph(letter, content)
             
-            # Add the content directly
-            p.add_run(content)
-            
-            return p
-
-        # Start a global counter for note numbering across all sections
-        note_counter = 1
-
-        add_bold_section_header("Building Traffic")
-        
-        # Add building traffic notes with global counter
-        has_traffic_notes = False
-        for box in building_traffic_boxes:
-            content = box.get("1.0", "end").strip()
-            if content:
-                has_traffic_notes = True
-                add_indented_paragraph(note_counter, content)
-                note_counter += 1
-        
-        # Add an empty numbered note if no content
-        if not has_traffic_notes:
-            add_indented_paragraph(note_counter, "")
-            note_counter += 1
-
-        add_bold_section_header("Mechanical/Repairs/Custodial")
-        
-        # Add mechanical notes with continuing counter
-        has_mechanical_notes = False
-        for box in mechanical_boxes:
-            content = box.get("1.0", "end").strip()
-            if content:
-                has_mechanical_notes = True
-                add_indented_paragraph(note_counter, content)
-                note_counter += 1
-        
-        # Add an empty numbered note if no content
-        if not has_mechanical_notes:
-            add_indented_paragraph(note_counter, "")
-            note_counter += 1
-
-        add_bold_section_header("Production Services (Meetings, Events, Set-ups, AV)")
-        
-        # Add production notes with continuing counter
-        has_production_notes = False
-        for box in production_boxes:
-            content = box.get("1.0", "end").strip()
-            if content:
-                has_production_notes = True
-                add_indented_paragraph(note_counter, content)
-                note_counter += 1
-        
-        # Add an empty numbered note if no content
-        if not has_production_notes:
-            add_indented_paragraph(note_counter, "")
             note_counter += 1
             
-        # === Decibel reading and Security table modifications ===
-        
-        if decibel_entries:
-            add_bold_section_header("Decibel Readings")
-            # Create a table for decibel readings
+            # Door check
+            door_time = red_gym_door_check_time.get().strip()   
+            door_day_type = red_gym_door_check_day_type.get()
+            
+            # Create paragraph for door check with bold formatting
+            p = doc.add_paragraph("")
+            p.paragraph_format.left_indent = Inches(0.25)
+            p.add_run(f"{note_counter}. ").bold = True
+            p.add_run("I checked to confirm that the Building Doors were locked and the door swipe scanner was red at ")
+            p.add_run(door_time).bold = True
+            p.add_run(" on a ")
+            p.add_run(door_day_type).bold = True
+            p.add_run(".")
+            
+            note_counter += 1
+
+            # Mail
+            add_bold_section_header("Mail")
+            has_mail_notes = False
+            for box in red_gym_mail_boxes:
+                content = box.get("1.0", "end").strip()
+                if content:
+                    has_mail_notes = True
+                    add_indented_paragraph(note_counter, content)
+                    note_counter += 1
+            
+            if not has_mail_notes:
+                add_indented_paragraph(note_counter, "")
+                note_counter += 1
+
+            # Miscellaneous
+            add_bold_section_header("Miscellaneous")
+            has_misc_notes = False
+            for box in red_gym_misc_boxes:
+                content = box.get("1.0", "end").strip()
+                if content:
+                    has_misc_notes = True
+                    add_indented_paragraph(note_counter, content)
+                    note_counter += 1
+            
+            if not has_misc_notes:
+                add_indented_paragraph(note_counter, "None")
+                note_counter += 1
+
+        else:
+            # Existing code for Memorial Union and Union South
+            # Terrace Manager(s) only for Memorial Union
+            if building == "Memorial Union":
+                add_bold_para_with_input("Terrace Manager(s)", entries["terrace_managers"].get())
+            add_bold_para_with_input("Event Manager(s)", entries["eventmanagers"].get())
+            add_bold_para_with_input("Guest Service Specialist", entries["gss"].get())
+            add_bold_para_with_input("Operation Manager(s)", entries["operation_managers"].get())
+            add_bold_para_with_input("Custodial Supervisor(s)", entries["custodial"].get())
+            add_bold_para_with_input("Production Supervisor(s)", entries["production"].get())
+            add_bold_para_with_input("Retail & Dining Supervisor(s)", entries["retail"].get())
+            add_bold_para_with_input("Catering Supervisor(s)", entries["catering"].get())
+            add_bold_para_with_input("CAVR Desk Staff", entries["cavr"].get())
+
+            # Bold section headers
+            p = doc.add_paragraph()
+            p.add_run("\nNotes:").bold = True
+            
+            def add_bold_section_header(text):
+                p = doc.add_paragraph()
+                p.add_run(text).bold = True
+                return p
+                
+            # Function to add indented paragraphs using Inches for better control
+            def add_indented_paragraph(number, content):
+                # Create a paragraph with the content and number
+                p = doc.add_paragraph("")
+                p.paragraph_format.left_indent = Inches(0.25)  # Change from 0.5 to 0.25 inch indent
+                
+                # Add the number with bold formatting
+                p.add_run(f"{number}. ").bold = True
+                
+                # Add the content directly
+                p.add_run(content)
+                
+                return p
+
+            # Start a global counter for note numbering across all sections
+            note_counter = 1
+
+            add_bold_section_header("Building Traffic")
+            
+            # Add building traffic notes with global counter
+            has_traffic_notes = False
+            for box in building_traffic_boxes:
+                content = box.get("1.0", "end").strip()
+                if content:
+                    has_traffic_notes = True
+                    add_indented_paragraph(note_counter, content)
+                    note_counter += 1
+            
+            # Add an empty numbered note if no content
+            if not has_traffic_notes:
+                add_indented_paragraph(note_counter, "")
+                note_counter += 1
+
+            add_bold_section_header("Mechanical/Repairs/Custodial")
+            
+            # Add mechanical notes with continuing counter
+            has_mechanical_notes = False
+            for box in mechanical_boxes:
+                content = box.get("1.0", "end").strip()
+                if content:
+                    has_mechanical_notes = True
+                    add_indented_paragraph(note_counter, content)
+                    note_counter += 1
+            
+            # Add an empty numbered note if no content
+            if not has_mechanical_notes:
+                add_indented_paragraph(note_counter, "")
+                note_counter += 1
+
+            add_bold_section_header("Production Services (Meetings, Events, Set-ups, AV)")
+            
+            # Add production notes with continuing counter
+            has_production_notes = False
+            for box in production_boxes:
+                content = box.get("1.0", "end").strip()
+                if content:
+                    has_production_notes = True
+                    add_indented_paragraph(note_counter, content)
+                    note_counter += 1
+            
+            # Add an empty numbered note if no content
+            if not has_production_notes:
+                add_indented_paragraph(note_counter, "")
+                note_counter += 1
+                
+            # === Decibel reading and Security table modifications ===
+            
+            if decibel_entries:
+                add_bold_section_header("Decibel Readings")
+                # Create a table for decibel readings
+                table = doc.add_table(rows=1, cols=3)
+                table.style = 'Table Grid'
+                
+                # Add header row - bold the headers
+                header_cells = table.rows[0].cells
+                header_cells[0].paragraphs[0].add_run("Time").bold = True
+                header_cells[1].paragraphs[0].add_run("Reading (dB)").bold = True
+                header_cells[2].paragraphs[0].add_run("Location").bold = True
+                
+                # Center-align header cells
+                for cell in header_cells:
+                    for paragraph in cell.paragraphs:
+                        paragraph.alignment = 1  # 1 = CENTER
+
+                # Add data rows
+                for time_entry, reading_entry, location_entry in decibel_entries:
+                    time = time_entry.get().strip()
+                    reading = reading_entry.get().strip()
+                    location = location_entry.get().strip()
+                    if time and reading and location and time != "Time" and reading != "Reading (db)" and location != "Location":
+                        row_cells = table.add_row().cells
+                        row_cells[0].text = time
+                        row_cells[1].text = reading
+                        row_cells[2].text = location
+                        
+                        # Center-align all cells in this row
+                        for cell in row_cells:
+                            for paragraph in cell.paragraphs:
+                                paragraph.alignment = 1  # 1 = CENTER
+
+            add_bold_section_header("Patron Services (Membership, Patron Assistance, Problem Patrons)")
+            
+            # Add patron service notes with continuing counter
+            has_patron_notes = False
+            for box in patron_boxes:
+                content = box.get("1.0", "end").strip()
+                if content:
+                    has_patron_notes = True
+                    add_indented_paragraph(note_counter, content)
+                    note_counter += 1
+            
+            # Add an empty numbered note if no content
+            if not has_patron_notes:
+                add_indented_paragraph(note_counter, "")
+                note_counter += 1
+
+            add_bold_section_header("Access/Lock/Unlock")
+
+            # Special case for access notes - bold the user input instead
+            access_notes = [
+                {
+                    "text": f"At the early check, the loading dock arm gate was {access_inputs['early_gate'].get().lower()} at {access_inputs['early_time'].get()}.",
+                    "bold_parts": [access_inputs['early_gate'].get().lower(), access_inputs['early_time'].get()]
+                },
+                {
+                    "text": f"At the closing check, the loading dock arm gate was {access_inputs['close_gate'].get().lower()} at {access_inputs['close_time'].get()}.",
+                    "bold_parts": [access_inputs['close_gate'].get().lower(), access_inputs['close_time'].get()]
+                },
+                {
+                    "text": f"At the closing check, the HID scanners were {access_inputs['hid_status'].get().lower()}.",
+                    "bold_parts": [access_inputs['hid_status'].get().lower()]
+                },
+                {
+                    "text": f"I {access_inputs['door_status'].get().lower()} secured the loading dock overhead door for the night.",
+                    "bold_parts": [access_inputs['door_status'].get().lower()]
+                }
+            ]
+
+            # Auto-generated sentences with bold user inputs and continuing counter with indentation
+            for note_data in access_notes:
+                p = doc.add_paragraph("")
+                # Indent the entire paragraph using Inches
+                p.paragraph_format.left_indent = Inches(0.25)  # Change from 0.5 to 0.25
+                
+                # Add the number with bold formatting
+                p.add_run(f"{note_counter}. ").bold = True
+                
+                sentence = note_data["text"]
+                bold_parts = note_data["bold_parts"]
+                
+                current_pos = 0
+                for bold_part in bold_parts:
+                    if bold_part in sentence[current_pos:]:
+                        # Find position of bold part
+                        part_pos = sentence.find(bold_part, current_pos)
+                        
+                        # Add text before the bold part
+                        if part_pos > current_pos:
+                            p.add_run(sentence[current_pos:part_pos])
+                        
+                        # Add the bold part
+                        p.add_run(bold_part).bold = True
+                        
+                        # Update position
+                        current_pos = part_pos + len(bold_part)
+                
+                # Add any remaining text after the last bold part
+                if current_pos < len(sentence):
+                    p.add_run(sentence[current_pos:])
+                    
+                note_counter += 1
+                
+            # User-entered access notes
+            for box in access_note_boxes:
+                content = box.get("1.0", "end").strip()
+                if content:
+                    add_indented_paragraph(note_counter, content)
+                    note_counter += 1
+
+            add_bold_section_header("Cash Office")
+            
+            # Add cash office notes with continuing counter
+            has_cash_notes = False
+            for box in cash_boxes:
+                content = box.get("1.0", "end").strip()
+                if content:
+                    has_cash_notes = True
+                    add_indented_paragraph(note_counter, content)
+                    note_counter += 1
+            
+            # Add an empty numbered note if no content
+            if not has_cash_notes:
+                add_indented_paragraph(note_counter, "")
+                note_counter += 1
+
+            # Only include Memorial Union specific sections if the building is Memorial Union
+            if building == "Memorial Union":
+                add_bold_section_header("Carding Runs")
+                
+                # Add carding notes with continuing counter
+                has_carding_notes = False
+                for box in carding_boxes:
+                    content = box.get("1.0", "end").strip()
+                    if content:
+                        has_carding_notes = True
+                        add_indented_paragraph(note_counter, content)
+                        note_counter += 1
+                
+                # Add an empty numbered note if no content
+                if not has_carding_notes:
+                    add_indented_paragraph(note_counter, "")
+                    note_counter += 1
+
+                add_bold_section_header("Terrace Traffic")
+                
+                # Add terrace traffic notes with continuing counter
+                has_terrace_notes = False
+                for box in terrace_boxes:
+                    content = box.get("1.0", "end").strip()
+                    if content:
+                        has_terrace_notes = True
+                        add_indented_paragraph(note_counter, content)
+                        note_counter += 1
+                
+                # Add an empty numbered note if no content
+                if not has_terrace_notes:
+                    add_indented_paragraph(note_counter, "")
+                    note_counter += 1
+
+                add_bold_section_header("Terrace Enforcement")
+                
+                # Add enforcement notes with continuing counter
+                has_enforcement_notes = False
+                enforcement_index = 0  # Track index for both images and text notes
+                
+                for i, box in enumerate(enforcement_boxes):
+                    content = box.get("1.0", "end").strip()
+                    
+                    # Check if this is an image entry (has corresponding image path)
+                    if i < len(enforcement_images) and enforcement_images[i].get():
+                        # This is an image with description
+                        image_path = enforcement_images[i].get()
+                        
+                        # Add the image to the document
+                        try:
+                            # Insert image first with width fitting document and height of 400
+                            doc.add_picture(image_path, width=Inches(6.5), height=Inches(250/72))  # 6.5 inches width (standard doc width), 400px height converted to inches
+                            
+                            # Add numbered description after the image
+                            if content:
+                                p = doc.add_paragraph("")
+                                p.paragraph_format.left_indent = Inches(0.25)
+                                p.add_run(f"{note_counter}. ").bold = True
+                                p.add_run(content)
+                            else:
+                                # If no description, still add the number
+                                p = doc.add_paragraph("")
+                                p.paragraph_format.left_indent = Inches(0.25)
+                                p.add_run(f"{note_counter}. ").bold = True
+                            
+                            has_enforcement_notes = True
+                            note_counter += 1
+                        except Exception as e:
+                            # If image fails to load, just add the text
+                            if content:
+                                add_indented_paragraph(note_counter, content)
+                                has_enforcement_notes = True
+                                note_counter += 1
+                    else:
+                        # Regular text note
+                        if content:
+                            has_enforcement_notes = True
+                            add_indented_paragraph(note_counter, content)
+                            note_counter += 1
+                
+
+                # Add an empty numbered note if no content
+                if not has_enforcement_notes:
+                    add_indented_paragraph(note_counter, "")
+                    note_counter += 1
+
+           
+            # === Dining Service & Markets ===
+            add_bold_section_header("Dining Service & Markets")
+            
+            # Add dining notes with continuing counter
+            has_dining_notes = False
+            for box in dining_boxes:
+                content = box.get("1.0", "end").strip()
+                if content:
+                    has_dining_notes = True
+                    add_indented_paragraph(note_counter, content)
+                    note_counter += 1
+            
+            # Add an empty numbered note if no content
+            if not has_dining_notes:
+                add_indented_paragraph(note_counter, "")
+                note_counter += 1
+
+            # === Hotel ===
+            add_bold_section_header("Hotel")
+            
+            # Add hotel notes with continuing counter
+            has_hotel_notes = False
+            for box in hotel_boxes:
+                content = box.get("1.0", "end").strip()
+                if content:
+                    has_hotel_notes = True
+                    add_indented_paragraph(note_counter, content)
+                    note_counter += 1
+            
+            # Add an empty numbered note if no content
+            if not has_hotel_notes:
+                add_indented_paragraph(note_counter, "")
+                note_counter += 1
+
+            # === Miscellaneous ===
+            add_bold_section_header("Miscellaneous")
+            
+            # Add miscellaneous notes with continuing counter
+            has_misc_notes = False
+            for box in misc_boxes:
+                content = box.get("1.0", "end").strip()
+                if content:
+                    has_misc_notes = True
+                    add_indented_paragraph(note_counter, content)
+                    note_counter += 1
+            
+            # Add an empty numbered note if no content
+            if not has_misc_notes:
+                add_indented_paragraph(note_counter, "")
+                note_counter += 1
+
+            # === Security Section === Only for Memorial Union and Union South
+            add_bold_section_header("Security")  # Changed from "CSC Log"
+
             table = doc.add_table(rows=1, cols=3)
             table.style = 'Table Grid'
             
-            # Add header row - bold the headers
-            header_cells = table.rows[0].cells
-            header_cells[0].paragraphs[0].add_run("Time").bold = True
-            header_cells[1].paragraphs[0].add_run("Reading (dB)").bold = True
-            header_cells[2].paragraphs[0].add_run("Location").bold = True
+            hdr_cells = table.rows[0].cells
+            # Bold the headers
+            hdr_cells[0].paragraphs[0].add_run("Shift").bold = True
+            hdr_cells[1].paragraphs[0].add_run("Staff Requested").bold = True
+            hdr_cells[2].paragraphs[0].add_run("Staff Present").bold = True
             
             # Center-align header cells
-            for cell in header_cells:
+            for cell in hdr_cells:
                 for paragraph in cell.paragraphs:
                     paragraph.alignment = 1  # 1 = CENTER
 
-            # Add data rows
-            for time_entry, reading_entry, location_entry in decibel_entries:
-                time = time_entry.get().strip()
-                reading = reading_entry.get().strip()
-                location = location_entry.get().strip()
-                if time and reading and location and time != "Time" and reading != "Reading (db)" and location != "Location":
-                    row_cells = table.add_row().cells
-                    row_cells[0].text = time
-                    row_cells[1].text = reading
-                    row_cells[2].text = location
-                    
-                    # Center-align all cells in this row
-                    for cell in row_cells:
-                        for paragraph in cell.paragraphs:
-                            paragraph.alignment = 1  # 1 = CENTER
+            for shift in csc_shifts:
+                req_val = csc_entries[shift]["requested"].get().strip()
+                pres_val = csc_entries[shift]["present"].get().strip()
+                names_val = csc_entries[shift]["names"].get().strip()
 
-        add_bold_section_header("Patron Services (Membership, Patron Assistance, Problem Patrons)")
-        
-        # Add patron service notes with continuing counter
-        has_patron_notes = False
-        for box in patron_boxes:
-            content = box.get("1.0", "end").strip()
-            if content:
-                has_patron_notes = True
-                add_indented_paragraph(note_counter, content)
-                note_counter += 1
-        
-        # Add an empty numbered note if no content
-        if not has_patron_notes:
-            add_indented_paragraph(note_counter, "")
-            note_counter += 1
+                # Format names in parentheses only if present is a number
+                pres_display = pres_val
+                if pres_val.isdigit() and names_val:
+                    pres_display = f"{pres_val} ({names_val})"
 
-        add_bold_section_header("Access/Lock/Unlock")
-
-        # Special case for access notes - bold the user input instead
-        access_notes = [
-            {
-                "text": f"At the early check, the loading dock arm gate was {access_inputs['early_gate'].get().lower()} at {access_inputs['early_time'].get()}.",
-                "bold_parts": [access_inputs['early_gate'].get().lower(), access_inputs['early_time'].get()]
-            },
-            {
-                "text": f"At the closing check, the loading dock arm gate was {access_inputs['close_gate'].get().lower()} at {access_inputs['close_time'].get()}.",
-                "bold_parts": [access_inputs['close_gate'].get().lower(), access_inputs['close_time'].get()]
-            },
-            {
-                "text": f"At the closing check, the HID scanners were {access_inputs['hid_status'].get().lower()}.",
-                "bold_parts": [access_inputs['hid_status'].get().lower()]
-            },
-            {
-                "text": f"I {access_inputs['door_status'].get().lower()} secured the loading dock overhead door for the night.",
-                "bold_parts": [access_inputs['door_status'].get().lower()]
-            }
-        ]
-
-        # Auto-generated sentences with bold user inputs and continuing counter with indentation
-        for note_data in access_notes:
-            p = doc.add_paragraph("")
-            # Indent the entire paragraph using Inches
-            p.paragraph_format.left_indent = Inches(0.25)  # Change from 0.5 to 0.25
-            
-            # Add the number with bold formatting
-            p.add_run(f"{note_counter}. ").bold = True
-            
-            sentence = note_data["text"]
-            bold_parts = note_data["bold_parts"]
-            
-            current_pos = 0
-            for bold_part in bold_parts:
-                if bold_part in sentence[current_pos:]:
-                    # Find position of bold part
-                    part_pos = sentence.find(bold_part, current_pos)
-                    
-                    # Add text before the bold part
-                    if part_pos > current_pos:
-                        p.add_run(sentence[current_pos:part_pos])
-                    
-                    # Add the bold part
-                    p.add_run(bold_part).bold = True
-                    
-                    # Update position
-                    current_pos = part_pos + len(bold_part)
-            
-            # Add any remaining text after the last bold part
-            if current_pos < len(sentence):
-                p.add_run(sentence[current_pos:])
+                row = table.add_row().cells
                 
-            note_counter += 1
-            
-        # User-entered access notes
-        for box in access_note_boxes:
-            content = box.get("1.0", "end").strip()
-            if content:
-                add_indented_paragraph(note_counter, content)
-                note_counter += 1
+                # Bold the shift name - no tab character needed
+                shift_run = row[0].paragraphs[0].add_run(shift)
+                shift_run.bold = True
+                
+                # Set text directly
+                row[1].text = req_val if req_val else "-"
+                row[2].text = pres_display if pres_display else "-"
+                
+                # Center-align all cells in this row
+                for cell in row:
+                    for paragraph in cell.paragraphs:
+                        paragraph.alignment = 1  # 1 = CENTER
 
-        add_bold_section_header("Cash Office")
-        
-        # Add cash office notes with continuing counter
-        has_cash_notes = False
-        for box in cash_boxes:
-            content = box.get("1.0", "end").strip()
-            if content:
-                has_cash_notes = True
-                add_indented_paragraph(note_counter, content)
-                note_counter += 1
-        
-        # Add an empty numbered note if no content
-        if not has_cash_notes:
-            add_indented_paragraph(note_counter, "")
-            note_counter += 1
+        # Excel Tally Update - Only for non-Red Gym buildings
+        if building != "Red Gym":
+            try:
+                # Extract year and date for folder and filename
+                user_date = entries["date"].get()
+                parsed_date = datetime.strptime(user_date, "%A, %B %d, %Y")
+                current_year = parsed_date.strftime("%Y")
+                current_month = parsed_date.strftime("%B")
+                # Build master tag set from all tab tag lists
+                master_tag_set = set()
+                for taglist in [MECHANICAL_TAG_OPTIONS, PRODUCTION_TAG_OPTIONS, PATRON_TAG_OPTIONS, ACCESS_TAG_OPTIONS, CASH_TAG_OPTIONS, DINING_TAG_OPTIONS, TERRACE_TAG_OPTIONS]:
+                    master_tag_set.update(tag for tag in taglist if tag != "None")
+                # Add special-case tags
+                master_tag_set.add("Hotel Request")
+                master_tag_set.add("Carding Support/Lead Carding")
+                master_tag_set.add("Decibel checked")
+                master_tag_set.add("Patron Services/inquires/General Assistance")
+                categories = sorted(master_tag_set)
+                months = [
+                    "January", "February", "March", "April", "May", "June",
+                    "July", "August", "September", "October", "November", "December"
+                ]
+                # Create year and building folders if not exist
+                year_dir = os.path.join(os.getcwd(), current_year)
+                building_dir = os.path.join(year_dir, building)
+                os.makedirs(building_dir, exist_ok=True)
+                # Save tally as building_Tally_YYYY.xlsx in building folder
+                building_short = "MU" if building == "Memorial Union" else "US"
+                tally_filename = f"{building_short}_Tally_{current_year}.xlsx"
+                tally_path = os.path.join(building_dir, tally_filename)
+                # Load or create the Excel file for the current year/building
+                if os.path.exists(tally_path):
+                    df = pd.read_excel(tally_path, index_col=0)
+                    for category in categories:
+                        if category not in df.index:
+                            df.loc[category] = [0] * len(df.columns)
+                    # Remove any rows not in master list
+                    for row in list(df.index):
+                        if row not in categories:
+                            df = df.drop(row)
+                else:
+                    df = pd.DataFrame(0, index=categories, columns=months)
+                # Tally tags for all notes
+                tag_counts = {cat: 0 for cat in categories}
+                # Mechanical
+                for tag_var_list, box in zip(mechanical_note_tags, mechanical_boxes):
+                    content = box.get("1.0", "end").strip()
+                    if not content:
+                        continue
+                    tags = set(var.get() for var in tag_var_list if var.get() != "None")
+                    for tag in tags:
+                        tag_counts[tag] += 1
+                # Production
+                for tag_var_list, box in zip(production_note_tags, production_boxes):
+                    content = box.get("1.0", "end").strip()
+                    if not content:
+                        continue
+                    tags = set(var.get() for var in tag_var_list if var.get() != "None")
+                    for tag in tags:
+                        tag_counts[tag] += 1
+                # Patron
+                for tag_var_list, box in zip(patron_note_tags, patron_boxes):
+                    content = box.get("1.0", "end").strip()
+                    if not content:
+                        continue
+                    tags = set(var.get() for var in tag_var_list if var.get() != "None")
+                    if tags:
+                        for tag in tags:
+                            tag_counts[tag] += 1
+                    else:
+                        # If no tag but text, count as General Assistance
+                        tag_counts["Patron Services/inquires/General Assistance"] += 1
+                # Access
+                for tag_var_list, box in zip(access_note_tags, access_note_boxes):
+                    content = box.get("1.0", "end").strip()
+                    if not content:
+                        continue
+                    tags = set(var.get() for var in tag_var_list if var.get() != "None")
+                    for tag in tags:
+                        tag_counts[tag] += 1
+                # Cash
+                for tag_var_list, box in zip(cash_note_tags, cash_boxes):
+                    content = box.get("1.0", "end").strip()
+                    if not content:
+                        continue
+                    tags = set(var.get() for var in tag_var_list if var.get() != "None")
+                    for tag in tags:
+                        tag_counts[tag] += 1
+                # Dining
+                for tag_var_list, box in zip(dining_note_tags, dining_boxes):
+                    content = box.get("1.0", "end").strip()
+                    if not content:
+                        continue
+                    tags = set(var.get() for var in tag_var_list if var.get() != "None")
+                    for tag in tags:
+                        tag_counts[tag] += 1
+                # Memorial Union specific sections
+                if building == "Memorial Union":
+                    # Terrace
+                    for tag_var_list, box in zip(terrace_note_tags, terrace_boxes):
+                        content = box.get("1.0", "end").strip()
+                        if not content:
+                            continue
+                        tags = set(var.get() for var in tag_var_list if var.get() != "None")
+                        for tag in tags:
+                            tag_counts[tag] += 1
+                    # Enforcement
+                    for tag_var_list, box in zip(enforcement_note_tags, enforcement_boxes):
+                        content = box.get("1.0", "end").strip()
+                        if not content:
+                            continue
+                        tags = set(var.get() for var in tag_var_list if var.get() != "None")
+                        for tag in tags:
+                            tag_counts[tag] += 1
+                    # Alumni
+                    for tag_var_list, box in zip(alumni_note_tags, alumni_boxes):
+                        content = box.get("1.0", "end").strip()
+                        if not content:
+                            continue
+                        tags = set(var.get() for var in tag_var_list if var.get() != "None")
+                        for tag in tags:
+                            tag_counts[tag] += 1
+                    # Pier
+                    for tag_var_list, box in zip(pier_note_tags, pier_boxes):
+                        content = box.get("1.0", "end").strip()
+                        if not content:
+                            continue
+                        tags = set(var.get() for var in tag_var_list if var.get() != "None")
+                        for tag in tags:
+                            tag_counts[tag] += 1
+                # Hotel (special case)
+                for box in hotel_boxes:
+                    content = box.get("1.0", "end").strip()
+                    if content:
+                        tag_counts["Hotel Request"] +=   1
+                # Decibel (special case)
+                if any(time.get().strip() and time.get().strip() != "Time" for time, _, _ in decibel_entries):
+                    tag_counts["Decibel checked"] += 1
+                # Write tallies to Excel
+                for category, count in tag_counts.items():
+                    if category in df.index and current_month in df.columns:
+                        df.loc[category, current_month] += count
+                df = df.loc[categories]  # Ensure order
+                df.to_excel(tally_path)
+            except Exception as e:
+                messagebox.showerror("Excel Error", f"Failed to update Excel tally: {e}")
+        else:
+            # Red Gym Excel Tally Update
+            try:
+                # Extract year and date for folder and filename
+                user_date = entries["date"].get()
+                parsed_date = datetime.strptime(user_date, "%A, %B %d, %Y")
+                current_year = parsed_date.strftime("%Y")
+                current_month = parsed_date.strftime("%B")
+                # Build Red Gym tag set
+                red_gym_tag_set = set()
+                for taglist in [RED_GYM_MISC_TAG_OPTIONS]:
+                    red_gym_tag_set.update(tag for tag in taglist if tag != "None")
+                categories = sorted(red_gym_tag_set)
+                months = [
+                    "January", "February", "March", "April", "May", "June",
+                    "July", "August", "September", "October", "November", "December"
+                ]
+                # Create year and building folders if not exist
+                year_dir = os.path.join(os.getcwd(), current_year)
+                building_dir = os.path.join(year_dir, building)
+                os.makedirs(building_dir, exist_ok=True)
+                # Save tally as RG_Tally_YYYY.xlsx in Red Gym folder
+                tally_filename = f"RG_Tally_{current_year}.xlsx"
+                tally_path = os.path.join(building_dir, tally_filename)
+                # Load or create the Excel file for the current year/building
+                if os.path.exists(tally_path):
+                    df = pd.read_excel(tally_path, index_col=0)
+                    for category in categories:
+                        if category not in df.index:
+                            df.loc[category] = [0] * len(df.columns)
+                    # Remove any rows not in master list
+                    for row in list(df.index):
+                        if row not in categories:
+                            df = df.drop(row)
+                else:
+                    df = pd.DataFrame(0, index=categories, columns=months)
+                # Tally tags for Red Gym misc notes
+                tag_counts = {cat: 0 for cat in categories}
+                # Red Gym Misc
+                for tag_var_list, box in zip(misc_note_tags, red_gym_misc_boxes):
+                    content = box.get("1.0", "end").strip()
+                    if not content:
+                        continue
+                    tags = set(var.get() for var in tag_var_list if var.get() != "None")
+                    for tag in tags:
+                        tag_counts[tag] += 1
+                # Write tallies to Excel
+                for category, count in tag_counts.items():
+                    if category in df.index and current_month in df.columns:
+                        df.loc[category, current_month] += count
+                df = df.loc[categories]  # Ensure order
+                df.to_excel(tally_path)
+            except Exception as e:
+                messagebox.showerror("Excel Error", f"Failed to update Red Gym Excel tally: {e}")
 
-        # Only include Memorial Union specific sections if the building is Memorial Union
-        if building == "Memorial Union":
-            add_bold_section_header("Carding Runs")
-            
-            # Add carding notes with continuing counter
-            has_carding_notes = False
-            for box in carding_boxes:
-                content = box.get("1.0", "end").strip()
-                if content:
-                    has_carding_notes = True
-                    add_indented_paragraph(note_counter, content)
-                    note_counter += 1
-            
-            # Add an empty numbered note if no content
-            if not has_carding_notes:
-                add_indented_paragraph(note_counter, "")
-                note_counter += 1
-
-            add_bold_section_header("Terrace Traffic")
-            
-            # Add terrace traffic notes with continuing counter
-            has_terrace_notes = False
-            for box in terrace_boxes:
-                content = box.get("1.0", "end").strip()
-                if content:
-                    has_terrace_notes = True
-                    add_indented_paragraph(note_counter, content)
-                    note_counter += 1
-            
-            # Add an empty numbered note if no content
-            if not has_terrace_notes:
-                add_indented_paragraph(note_counter, "")
-                note_counter += 1
-
-            add_bold_section_header("Terrace Enforcement")
-            
-            # Add enforcement notes with continuing counter
-            has_enforcement_notes = False
-            for box in enforcement_boxes:
-                content = box.get("1.0", "end").strip()
-                if content:
-                    has_enforcement_notes = True
-                    add_indented_paragraph(note_counter, content)
-                    note_counter += 1
-            
-            # Add an empty numbered note if no content
-            if not has_enforcement_notes:
-                add_indented_paragraph(note_counter, "")
-                note_counter += 1
-
-            # === Alumni Park ===
-            add_bold_section_header("Alumni Park")
-            
-            # Add alumni park notes with continuing counter
-            has_alumni_notes = False
-            for box in alumni_boxes:
-                content = box.get("1.0", "end").strip()
-                if content:
-                    has_alumni_notes = True
-                    add_indented_paragraph(note_counter, content)
-                    note_counter += 1
-            
-            # Add an empty numbered note if no content
-            if not has_alumni_notes:
-                add_indented_paragraph(note_counter, "")
-                note_counter += 1
-
-            # === Goodspeed Family Pier ===
-            add_bold_section_header("Goodspeed Family Pier")
-            
-            # Add pier notes with continuing counter
-            has_pier_notes = False
-            for box in pier_boxes:
-                content = box.get("1.0", "end").strip()
-                if content:
-                    has_pier_notes = True
-                    add_indented_paragraph(note_counter, content)
-                    note_counter += 1
-            
-            # Add an empty numbered note if no content
-            if not has_pier_notes:
-                add_indented_paragraph(note_counter, "")
-                note_counter += 1
-
-        # === Dining Service & Markets ===
-        add_bold_section_header("Dining Service & Markets")
-        
-        # Add dining notes with continuing counter
-        has_dining_notes = False
-        for box in dining_boxes:
-            content = box.get("1.0", "end").strip()
-            if content:
-                has_dining_notes = True
-                add_indented_paragraph(note_counter, content)
-                note_counter += 1
-        
-        # Add an empty numbered note if no content
-        if not has_dining_notes:
-            add_indented_paragraph(note_counter, "")
-            note_counter += 1
-
-        # === Hotel ===
-        add_bold_section_header("Hotel")
-        
-        # Add hotel notes with continuing counter
-        has_hotel_notes = False
-        for box in hotel_boxes:
-            content = box.get("1.0", "end").strip()
-            if content:
-                has_hotel_notes = True
-                add_indented_paragraph(note_counter, content)
-                note_counter += 1
-        
-        # Add an empty numbered note if no content
-        if not has_hotel_notes:
-            add_indented_paragraph(note_counter, "")
-            note_counter += 1
-
-        # === Miscellaneous ===
-        add_bold_section_header("Miscellaneous")
-        
-        # Add miscellaneous notes with continuing counter
-        has_misc_notes = False
-        for box in misc_boxes:
-            content = box.get("1.0", "end").strip()
-            if content:
-                has_misc_notes = True
-                add_indented_paragraph(note_counter, content)
-                note_counter += 1
-        
-        # Add an empty numbered note if no content
-        if not has_misc_notes:
-            add_indented_paragraph(note_counter, "")
-            note_counter += 1
-
-        # === Security Section === (Changed from CSC Log)
-        add_bold_section_header("Security")  # Changed from "CSC Log"
-
-        table = doc.add_table(rows=1, cols=3)
-        table.style = 'Table Grid'
-        
-        hdr_cells = table.rows[0].cells
-        # Bold the headers
-        hdr_cells[0].paragraphs[0].add_run("Shift").bold = True
-        hdr_cells[1].paragraphs[0].add_run("Staff Requested").bold = True
-        hdr_cells[2].paragraphs[0].add_run("Staff Present").bold = True
-        
-        # Center-align header cells
-        for cell in hdr_cells:
-            for paragraph in cell.paragraphs:
-                paragraph.alignment = 1  # 1 = CENTER
-
-        for shift in csc_shifts:
-            req_val = csc_entries[shift]["requested"].get().strip()
-            pres_val = csc_entries[shift]["present"].get().strip()
-            names_val = csc_entries[shift]["names"].get().strip()
-
-            # Format names in parentheses only if present is a number
-            pres_display = pres_val
-            if pres_val.isdigit() and names_val:
-                pres_display = f"{pres_val} ({names_val})"
-
-            row = table.add_row().cells
-            
-            # Bold the shift name - no tab character needed
-            shift_run = row[0].paragraphs[0].add_run(shift)
-            shift_run.bold = True
-            
-            # Set text directly
-            row[1].text = req_val if req_val else "-"
-            row[2].text = pres_display if pres_display else "-"
-            
-            # Center-align all cells in this row
-            for cell in row:
-                for paragraph in cell.paragraphs:
-                    paragraph.alignment = 1  # 1 = CENTER
-
-        # Save report as MM-DD-YY.docx in the correct folder only
+        # Save report as MM-DD-YY.docx in the correct folder (for all building types)
         user_date = entries["date"].get()
         parsed_date = datetime.strptime(user_date, "%A, %B %d, %Y")
         current_year = parsed_date.strftime("%Y")
@@ -1304,158 +1926,6 @@ def generate_report():
         report_path = os.path.join(building_dir, report_filename)
         doc.save(report_path)
         
-        # === Excel Tally Update - Now with separate folders for each year and building ===
-        try:
-            # Extract year and date for folder and filename
-            user_date = entries["date"].get()
-            parsed_date = datetime.strptime(user_date, "%A, %B %d, %Y")
-            current_year = parsed_date.strftime("%Y")
-            current_month = parsed_date.strftime("%B")
-            # Build master tag set from all tab tag lists
-            master_tag_set = set()
-            for taglist in [MECHANICAL_TAG_OPTIONS, PRODUCTION_TAG_OPTIONS, PATRON_TAG_OPTIONS, ACCESS_TAG_OPTIONS, CASH_TAG_OPTIONS, DINING_TAG_OPTIONS, TERRACE_TAG_OPTIONS]:
-                master_tag_set.update(tag for tag in taglist if tag != "None")
-            # Add special-case tags
-            master_tag_set.add("Hotel Request")
-            master_tag_set.add("Carding Support/Lead Carding")
-            master_tag_set.add("Decibel checked")
-            master_tag_set.add("Patron Services/inquires/General Assistance")
-            categories = sorted(master_tag_set)
-            months = [
-                "January", "February", "March", "April", "May", "June",
-                "July", "August", "September", "October", "November", "December"
-            ]
-            # Create year and building folders if not exist
-            year_dir = os.path.join(os.getcwd(), current_year)
-            building_dir = os.path.join(year_dir, building)
-            os.makedirs(building_dir, exist_ok=True)
-            # Save report as MM-DD-YY.docx
-            report_filename = f"{parsed_date.month}-{parsed_date.day}-{str(parsed_date.year)[2:]}.docx"
-            report_path = os.path.join(building_dir, report_filename)
-            doc.save(report_path)
-            # Save tally as building_Tally_YYYY.xlsx in building folder
-            building_short = "MU" if building == "Memorial Union" else "US"
-            tally_filename = f"{building_short}_Tally_{current_year}.xlsx"
-            tally_path = os.path.join(building_dir, tally_filename)
-            # Load or create the Excel file for the current year/building
-            if os.path.exists(tally_path):
-                df = pd.read_excel(tally_path, index_col=0)
-                for category in categories:
-                    if category not in df.index:
-                        df.loc[category] = [0] * len(df.columns)
-                # Remove any rows not in master list
-                for row in list(df.index):
-                    if row not in categories:
-                        df = df.drop(row)
-            else:
-                df = pd.DataFrame(0, index=categories, columns=months)
-            # Tally tags for all notes
-            tag_counts = {cat: 0 for cat in categories}
-            # Mechanical
-            for tag_var_list, box in zip(mechanical_note_tags, mechanical_boxes):
-                content = box.get("1.0", "end").strip()
-                if not content:
-                    continue
-                tags = set(var.get() for var in tag_var_list if var.get() != "None")
-                for tag in tags:
-                    tag_counts[tag] += 1
-            # Production
-            for tag_var_list, box in zip(production_note_tags, production_boxes):
-                content = box.get("1.0", "end").strip()
-                if not content:
-                    continue
-                tags = set(var.get() for var in tag_var_list if var.get() != "None")
-                for tag in tags:
-                    tag_counts[tag] += 1
-            # Patron
-            for tag_var_list, box in zip(patron_note_tags, patron_boxes):
-                content = box.get("1.0", "end").strip()
-                if not content:
-                    continue
-                tags = set(var.get() for var in tag_var_list if var.get() != "None")
-                if tags:
-                    for tag in tags:
-                        tag_counts[tag] += 1
-                else:
-                    # If no tag but text, count as General Assistance
-                    tag_counts["Patron Services/inquires/General Assistance"] += 1
-            # Access
-            for tag_var_list, box in zip(access_note_tags, access_note_boxes):
-                content = box.get("1.0", "end").strip()
-                if not content:
-                    continue
-                tags = set(var.get() for var in tag_var_list if var.get() != "None")
-                for tag in tags:
-                    tag_counts[tag] += 1
-            # Cash
-            for tag_var_list, box in zip(cash_note_tags, cash_boxes):
-                content = box.get("1.0", "end").strip()
-                if not content:
-                    continue
-                tags = set(var.get() for var in tag_var_list if var.get() != "None")
-                for tag in tags:
-                    tag_counts[tag] += 1
-            # Dining
-            for tag_var_list, box in zip(dining_note_tags, dining_boxes):
-                content = box.get("1.0", "end").strip()
-                if not content:
-                    continue
-                tags = set(var.get() for var in tag_var_list if var.get() != "None")
-                for tag in tags:
-                    tag_counts[tag] += 1
-            # Terrace
-            for tag_var_list, box in zip(terrace_note_tags, terrace_boxes):
-                content = box.get("1.0", "end").strip()
-                if not content:
-                    continue
-                tags = set(var.get() for var in tag_var_list if var.get() != "None")
-                for tag in tags:
-                    tag_counts[tag] += 1
-            # Enforcement
-            for tag_var_list, box in zip(enforcement_note_tags, enforcement_boxes):
-                content = box.get("1.0", "end").strip()
-                if not content:
-                    continue
-                tags = set(var.get() for var in tag_var_list if var.get() != "None")
-                for tag in tags:
-                    tag_counts[tag] += 1
-            # Alumni
-            for tag_var_list, box in zip(alumni_note_tags, alumni_boxes):
-                content = box.get("1.0", "end").strip()
-                if not content:
-                    continue
-                tags = set(var.get() for var in tag_var_list if var.get() != "None")
-                for tag in tags:
-                    tag_counts[tag] += 1
-            # Pier
-            for tag_var_list, box in zip(pier_note_tags, pier_boxes):
-                content = box.get("1.0", "end").strip()
-                if not content:
-                    continue
-                tags = set(var.get() for var in tag_var_list if var.get() != "None")
-                for tag in tags:
-                    tag_counts[tag] += 1
-            # Hotel (special case)
-            for box in hotel_boxes:
-                content = box.get("1.0", "end").strip()
-                if content:
-                    tag_counts["Hotel Request"] += 1
-            # Carding (special case)
-            for box in carding_boxes:
-                content = box.get("1.0", "end").strip()
-                if content:
-                    tag_counts["Carding Support/Lead Carding"] += 1
-            # Decibel (special case)
-            if any(time.get().strip() and time.get().strip() != "Time" for time, _, _ in decibel_entries):
-                tag_counts["Decibel checked"] += 1
-            # Write tallies to Excel
-            for category, count in tag_counts.items():
-                if category in df.index and current_month in df.columns:
-                    df.loc[category, current_month] += count
-            df = df.loc[categories]  # Ensure order
-            df.to_excel(tally_path)
-        except Exception as e:
-            messagebox.showerror("Excel Error", f"Failed to update Excel tally: {e}")
         messagebox.showinfo("Success", f"Report saved as {report_path}")
     except Exception as e:
         messagebox.showerror("Error", str(e))
