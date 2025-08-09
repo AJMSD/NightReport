@@ -1611,7 +1611,7 @@ def generate_report():
                         if content:
                             has_enforcement_notes = True
                             add_indented_paragraph(note_counter, content)
-                            note_counter += 1
+                            note_counter +=  1
                 
 
                 # Add an empty numbered note if no content
@@ -1619,7 +1619,38 @@ def generate_report():
                     add_indented_paragraph(note_counter, "")
                     note_counter += 1
 
-           
+                add_bold_section_header("Alumni Park")
+                
+                # Add alumni park notes with continuing counter
+                has_alumni_notes = False
+                for box in alumni_boxes:
+                    content = box.get("1.0", "end").strip()
+                    if content:
+                        has_alumni_notes = True
+                        add_indented_paragraph(note_counter, content)
+                        note_counter += 1
+                
+                # Add an empty numbered note if no content
+                if not has_alumni_notes:
+                    add_indented_paragraph(note_counter, "")
+                    note_counter += 1
+
+                add_bold_section_header("Goodspeed Family Pier")
+                
+                # Add pier notes with continuing counter
+                has_pier_notes = False
+                for box in pier_boxes:
+                    content = box.get("1.0", "end").strip()
+                    if content:
+                        has_pier_notes = True
+                        add_indented_paragraph(note_counter, content)
+                        note_counter += 1
+                
+                # Add an empty numbered note if no content
+                if not has_pier_notes:
+                    add_indented_paragraph(note_counter, "")
+                    note_counter += 1
+
             # === Dining Service & Markets ===
             add_bold_section_header("Dining Service & Markets")
             
