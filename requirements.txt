@@ -1,0 +1,10 @@
+# Document processing
+python-docx>=0.8.11
+
+# Excel file handling
+pandas>=1.3.0
+openpyxl>=3.0.9
+
+# Date and time handling (built-in)
+datetime  # Part of Python standard library
+
