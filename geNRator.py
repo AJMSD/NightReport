@@ -5,12 +5,15 @@ from docx.shared import Inches
 from datetime import datetime
 import pandas as pd
 import os
+import json
+import threading
+import time
 from openpyxl import load_workbook
 
 # === Building Selection Function ===
 def select_building():
-    # Ensure the main window is mapped so dialogs can show
-    root.deiconify()
+    # Don't show root window yet - wait until UI is fully configured
+    # root.deiconify()  # Removed - will show window after UI is configured
     building_window = tk.Toplevel()
     building_window.title("Select Building")
     building_window.configure(bg="black")
@@ -22,6 +25,23 @@ def select_building():
     x = int((screen_width / 2) - (window_width / 2))
     y = int((screen_height / 2) - (window_height / 2))
     building_window.geometry(f"{window_width}x{window_height}+{x}+{y}")
+    
+    # Make sure building window is visible and focused
+    building_window.lift()
+    building_window.focus_force()
+    
+    # macOS specific: Force window to be topmost temporarily
+    building_window.attributes('-topmost', True)
+    building_window.update()
+    building_window.attributes('-topmost', False)
+    
+    # Handle window close event - exit application if building selection is closed
+    def on_building_close():
+        stop_autosave()  # Stop any running autosave
+        root.quit()  # Exit the mainloop
+        root.destroy()  # Destroy the root window
+    
+    building_window.protocol("WM_DELETE_WINDOW", on_building_close)
     
     label = tk.Label(
         building_window, 
@@ -198,6 +218,13 @@ root.withdraw()  # Hide the main window until building is selected
 # Global building variable
 building = ""
 
+# Global autosave variables
+autosave_thread = None
+autosave_running = False
+
+# Global draft loading variable
+loaded_from_draft = False
+
 label_font = ("Helvetica", 11)
 entry_bg = "black"
 entry_fg = "white"
@@ -228,6 +255,28 @@ misc_note_tags = []
 csc_entries = {}
 csc_shifts = ["Morning", "Evening", "Special Event", "Chair Watch"]
 
+# Global frame variables that need to be available to widget creation functions
+traffic_notes_frame = None
+mechanical_notes_frame = None
+production_notes_frame = None
+patron_notes_frame = None
+cash_frame = None
+dining_frame = None
+hotel_frame = None
+misc_frame = None
+# Memorial Union specific frames
+carding_frame = None
+terrace_frame = None
+enforcement_frame = None
+alumni_frame = None
+pier_frame = None
+# Red Gym specific frames
+mail_frame = None
+# Access frame containers
+access_notes_container = None
+decibel_rows_container = None
+enforcement_components = []  # Track enforcement components for proper ordering
+
 # Add these global variables for Red Gym after the existing global lists
 red_gym_building_tours_box = None
 red_gym_deviations_entry = None
@@ -240,14 +289,25 @@ red_gym_misc_boxes = []
 # Memorial Union-specific
 carding_boxes = []
 terrace_boxes = []
-terrace_note_tags = []
 enforcement_boxes = []
 enforcement_note_tags = []
 enforcement_images = []  # Add this for storing image paths
+enforcement_items = []  # Special list for enforcement image dict items (Memorial Union only)
+enforcement_components = []  # Track enforcement components for proper ordering
 alumni_boxes = []
 alumni_note_tags = []
 pier_boxes = []
 pier_note_tags = []
+
+# Memorial Union specific function for enforcement component ordering
+def reorder_enforcement_components():
+    """Reorder enforcement components in the correct order"""
+    # Forget all components
+    for component in enforcement_components:
+        component.pack_forget()
+    # Re-pack in correct order
+    for component in enforcement_components:
+        component.pack(fill="x", pady=5)
 
 # Tag options by tab (global)
 MECHANICAL_TAG_OPTIONS = ["None", "FAMIS report", "Door Lock Failure", "Reset Elevator", "Custodial Support"]
@@ -277,6 +337,33 @@ def add_tagging_to_note(tag_frame, tag_options, tag_vars, tag_dropdowns):
                 dropdown.add_tag_btn.destroy()
                 delattr(dropdown, 'add_tag_btn')
         dropdown.bind("<<ComboboxSelected>>", on_tag_change)
+        return add_tag_dropdown  # Return the function for programmatic use
+    
+    def update_add_tag_buttons():
+        """Helper function to show/hide add tag buttons based on current tag values"""
+        # First, remove all existing add tag buttons
+        for dropdown in tag_dropdowns:
+            if hasattr(dropdown, 'add_tag_btn'):
+                dropdown.add_tag_btn.destroy()
+                delattr(dropdown, 'add_tag_btn')
+        
+        # Find the last dropdown with a non-"None" value
+        last_valid_index = -1
+        for i, var in enumerate(tag_vars):
+            if var and var.get() != "None":
+                last_valid_index = i
+        
+        # Only add the "Add Tag" button to the last dropdown with a valid tag
+        if last_valid_index >= 0 and last_valid_index < len(tag_dropdowns):
+            dropdown = tag_dropdowns[last_valid_index]
+            add_btn = tk.Button(tag_frame, text="+ Add Tag", bg="white", fg="black", font=("Helvetica", 9, "bold"),
+                               command=lambda: [add_tag_dropdown(), add_btn.destroy()])
+            add_btn.pack(side="left", padx=(0, 5))
+            dropdown.add_tag_btn = add_btn
+    
+    # Store the functions for later use
+    tag_frame.add_tag_dropdown = add_tag_dropdown
+    tag_frame.update_add_tag_buttons = update_add_tag_buttons
     add_tag_dropdown()
 
 # === Tabs ===
@@ -303,6 +390,541 @@ def add_labeled_entry(parent, label_text, key, default=""):
     entry.pack(fill="x")
     frame.pack(pady=5, padx=10, fill="x")
     entries[key] = entry
+
+# === Utility Functions ===
+
+def set_note_tags(note_tags_list, note_index, tags_to_set):
+    """
+    Utility function to set tag values for a specific note's tag comboboxes.
+    
+    Args:
+        note_tags_list: The global list containing tag variables for all notes (e.g., mechanical_note_tags)
+        note_index: Index of the note whose tags should be set (0-based)
+        tags_to_set: List of tag values to set
+    
+    Example:
+        set_note_tags(mechanical_note_tags, 0, ["FAMIS report", "Door Lock Failure"])
+    """
+    if note_index < len(note_tags_list) and tags_to_set:
+        # Filter out empty/None tags
+        valid_tags = [tag for tag in tags_to_set if tag and tag != "None"]
+        note_tag_vars = note_tags_list[note_index]
+        
+        # Create additional tag dropdowns if needed
+        while len(note_tag_vars) < len(valid_tags):
+            # We need to find and use the add_tag_dropdown function for this note
+            # This requires finding the tag frame associated with this note
+            # We'll handle this in the restore function instead
+            break
+        
+        for tag_index, tag_value in enumerate(valid_tags):
+            if tag_index < len(note_tag_vars):
+                note_tag_vars[tag_index].set(tag_value)
+
+def ensure_note_boxes(note_boxes_list, note_tags_list, add_function, target_count):
+    """
+    Utility function to ensure a specific number of note boxes exist.
+    Adds or removes boxes as needed to match the target count.
+    
+    Args:
+        note_boxes_list: The global list containing note textboxes (e.g., mechanical_boxes)
+        note_tags_list: The global list containing tag variables for notes (e.g., mechanical_note_tags)
+        add_function: The function to call to add new note boxes (e.g., add_mechanical_box)
+        target_count: Desired number of note boxes
+    
+    Example:
+        ensure_note_boxes(mechanical_boxes, mechanical_note_tags, add_mechanical_box, 3)
+    """
+    current_count = len(note_boxes_list)
+    
+    if current_count < target_count:
+        # Add more boxes
+        for _ in range(target_count - current_count):
+            add_function("")
+    elif current_count > target_count:
+        # Remove excess boxes
+        while len(note_boxes_list) > target_count:
+            # Get the widget to destroy - it might be the textbox or its parent frame
+            widget_to_destroy = note_boxes_list[-1]
+            parent = widget_to_destroy.master
+            
+            # Try to destroy the parent frame if it exists and looks like a note frame
+            try:
+                if hasattr(parent, 'winfo_children') and len(parent.winfo_children()) <= 3:
+                    parent.destroy()
+                else:
+                    widget_to_destroy.destroy()
+            except:
+                # Fallback to just destroying the widget
+                try:
+                    widget_to_destroy.destroy()
+                except:
+                    pass
+            
+            note_boxes_list.pop()
+        
+        # Also clean up tag lists to match
+        while len(note_tags_list) > target_count:
+            note_tags_list.pop()
+
+# === Promoted Widget Creation Helper Functions ===
+
+def add_building_traffic_box(default_text=""):
+    """Add a building traffic note box (applies to all buildings)"""
+    frame = tk.Frame(traffic_notes_frame, bg="black")
+    label = tk.Label(frame, text=f"Building Traffic Note #{len(building_traffic_boxes)+1}:", fg="white", bg="black", font=label_font)
+    textbox = tk.Text(frame, height=4, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
+    if default_text:
+        textbox.insert("1.0", default_text)
+    label.pack(anchor="w")
+    textbox.pack(fill="both", expand=True, padx=5)
+    frame.pack(pady=5, fill="x")
+    # Configure text box to auto-resize
+    configure_text_box(textbox)
+    building_traffic_boxes.append(textbox)
+
+def add_mechanical_box(default_text=""):
+    """Add a mechanical note box with dynamic tagging (Memorial Union & Union South)"""
+    frame = tk.Frame(mechanical_notes_frame, bg="black")
+    label = tk.Label(frame, text=f"Mechanical Note #{len(mechanical_boxes)+1}:", fg="white", bg="black", font=label_font)
+    textbox = tk.Text(frame, height=4, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
+    if default_text:
+        textbox.insert("1.0", default_text)
+    label.pack(anchor="w")
+    textbox.pack(fill="both", expand=True, padx=5)
+    configure_text_box(textbox)
+    mechanical_boxes.append(textbox)
+
+    # Tagging logic
+    tag_vars = []  # List of tk.StringVar for this note
+    tag_dropdowns = []  # List of dropdown widgets for this note
+
+    tag_frame = tk.Frame(frame, bg="black")
+    tag_frame.pack(anchor="w", pady=(2, 0))
+
+    def add_tag_dropdown():
+        var = tk.StringVar(value="None")
+        dropdown = ttk.Combobox(tag_frame, textvariable=var, values=MECHANICAL_TAG_OPTIONS, state="readonly", width=22)
+        dropdown.pack(side="left", padx=(0, 5))
+        tag_vars.append(var)
+        tag_dropdowns.append(dropdown)
+
+        def on_tag_change(event=None):
+            # Show +Add Tag button if a valid tag is selected and no button exists
+            if var.get() != "None" and not hasattr(dropdown, 'add_tag_btn'):
+                add_btn = tk.Button(tag_frame, text="+ Add Tag", bg="white", fg="black", font=("Helvetica", 9, "bold"),
+                                   command=lambda: [add_tag_dropdown(), add_btn.destroy()])
+                add_btn.pack(side="left", padx=(0, 5))
+                dropdown.add_tag_btn = add_btn
+            elif var.get() == "None" and hasattr(dropdown, 'add_tag_btn'):
+                dropdown.add_tag_btn.destroy()
+                delattr(dropdown, 'add_tag_btn')
+        dropdown.bind("<<ComboboxSelected>>", on_tag_change)
+        return add_tag_dropdown  # Return function for programmatic access
+    
+    def update_add_tag_buttons():
+        """Helper function to show/hide add tag buttons based on current tag values"""
+        # First, remove all existing add tag buttons
+        for dropdown in tag_dropdowns:
+            if hasattr(dropdown, 'add_tag_btn'):
+                dropdown.add_tag_btn.destroy()
+                delattr(dropdown, 'add_tag_btn')
+        
+        # Find the last dropdown with a non-"None" value
+        last_valid_index = -1
+        for i, var in enumerate(tag_vars):
+            if var and var.get() != "None":
+                last_valid_index = i
+        
+        # Only add the "Add Tag" button to the last dropdown with a valid tag
+        if last_valid_index >= 0 and last_valid_index < len(tag_dropdowns):
+            dropdown = tag_dropdowns[last_valid_index]
+            add_btn = tk.Button(tag_frame, text="+ Add Tag", bg="white", fg="black", font=("Helvetica", 9, "bold"),
+                               command=lambda: [add_tag_dropdown(), add_btn.destroy()])
+            add_btn.pack(side="left", padx=(0, 5))
+            dropdown.add_tag_btn = add_btn
+    
+    # Store the functions for later use during restoration
+    tag_frame.add_tag_dropdown = add_tag_dropdown
+    tag_frame.update_add_tag_buttons = update_add_tag_buttons
+    add_tag_dropdown()  # Add the first dropdown
+    mechanical_note_tags.append(tag_vars)
+    frame.pack(pady=5, fill="x")
+
+def add_production_note_box(default_text=""):
+    """Add a production note box with tagging (Memorial Union & Union South)"""
+    frame = tk.Frame(production_notes_frame, bg="black")
+    label = tk.Label(frame, text=f"Production Note #{len(production_boxes)+1}:", fg="white", bg="black", font=label_font)
+    textbox = tk.Text(frame, height=4, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
+    if default_text:
+        textbox.insert("1.0", default_text)
+    label.pack(anchor="w")
+    textbox.pack(fill="both", expand=True, padx=5)
+    frame.pack(pady=5, fill="x")
+    configure_text_box(textbox)
+    production_boxes.append(textbox)
+    # Tagging
+    tag_vars = []
+    tag_dropdowns = []
+    tag_frame = tk.Frame(frame, bg="black")
+    tag_frame.pack(anchor="w", pady=(2, 0))
+    add_tagging_to_note(tag_frame, PRODUCTION_TAG_OPTIONS, tag_vars, tag_dropdowns)
+    production_note_tags.append(tag_vars)
+    frame.pack(pady=5, fill="x")
+
+def add_decibel_row():
+    """Add a decibel reading row (Memorial Union & Union South)"""
+    row_frame = tk.Frame(decibel_rows_container, bg="black")
+    time_entry = tk.Entry(row_frame, width=15, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font)
+    reading_entry = tk.Entry(row_frame, width=15, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font)
+    location_entry = tk.Entry(row_frame, width=40, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font)
+
+    time_entry.insert(0, "Time")
+    reading_entry.insert(0, "Reading (db)")
+    location_entry.insert(0, "Location")
+
+    # Add focus event handlers to select all text when clicked
+    def on_focus_in(event):
+        event.widget.select_range(0, 'end')
+        event.widget.icursor('end')
+    
+    time_entry.bind("<FocusIn>", on_focus_in)
+    reading_entry.bind("<FocusIn>", on_focus_in)
+    location_entry.bind("<FocusIn>", on_focus_in)
+
+    time_entry.pack(side="left", padx=5)
+    reading_entry.pack(side="left", padx=5)
+    location_entry.pack(side="left", padx=5)
+    row_frame.pack(pady=3, anchor="w", fill="x")
+    
+    decibel_entries.append((time_entry, reading_entry, location_entry))
+
+def add_patron_note_box(default_text=""):
+    """Add a patron services note box with tagging (Memorial Union & Union South)"""
+    frame = tk.Frame(patron_notes_frame, bg="black")
+    label = tk.Label(frame, text=f"Patron Note #{len(patron_boxes)+1}:", fg="white", bg="black", font=label_font)
+    textbox = tk.Text(frame, height=6, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
+    if default_text:
+        textbox.insert("1.0", default_text)
+    label.pack(anchor="w")
+    textbox.pack(fill="both", expand=True, padx=5)
+    configure_text_box(textbox, min_height=6)
+    patron_boxes.append(textbox)
+    # Tagging
+    tag_vars = []
+    tag_dropdowns = []
+    tag_frame = tk.Frame(frame, bg="black")
+    tag_frame.pack(anchor="w", pady=(2, 0))
+    add_tagging_to_note(tag_frame, PATRON_TAG_OPTIONS, tag_vars, tag_dropdowns)
+    patron_note_tags.append(tag_vars)
+    frame.pack(pady=5, fill="x")
+
+def add_access_note():
+    """Add an access note box with tagging (Memorial Union & Union South)"""
+    frame = tk.Frame(access_notes_container, bg="black")
+    label = tk.Label(frame, text=f"Access Note #{len(access_note_boxes)+1}:", fg="white", bg="black", font=label_font)
+    textbox = tk.Text(frame, height=3, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
+    label.pack(anchor="w")
+    textbox.pack(fill="x", expand=True, padx=5)
+    frame.pack(pady=5, fill="x")
+    configure_text_box(textbox, min_height=3)
+    access_note_boxes.append(textbox)
+    # Tagging
+    tag_vars = []
+    tag_dropdowns = []
+    tag_frame = tk.Frame(frame, bg="black")
+    tag_frame.pack(anchor="w", pady=(2, 0))
+    add_tagging_to_note(tag_frame, ACCESS_TAG_OPTIONS, tag_vars, tag_dropdowns)
+    access_note_tags.append(tag_vars)
+    frame.pack(pady=5, fill="x")
+
+def add_cash_note_box(default_text=""):
+    """Add a cash office note box with tagging (Memorial Union & Union South)"""
+    frame = tk.Frame(cash_frame, bg="black")
+    label = tk.Label(frame, text=f"Cash Office Note #{len(cash_boxes)+1}:", fg="white", bg="black", font=label_font)
+    textbox = tk.Text(frame, height=4, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
+    if default_text:
+        textbox.insert("1.0", default_text)
+    label.pack(anchor="w")
+    textbox.pack(fill="both", expand=True, padx=5)
+    frame.pack(pady=5, fill="x")
+    configure_text_box(textbox)
+    cash_boxes.append(textbox)
+    # Tagging
+    tag_vars = []
+    tag_dropdowns = []
+    tag_frame = tk.Frame(frame, bg="black")
+    tag_frame.pack(anchor="w", pady=(2, 0))
+    add_tagging_to_note(tag_frame, CASH_TAG_OPTIONS, tag_vars, tag_dropdowns)
+    cash_note_tags.append(tag_vars)
+    frame.pack(pady=5, fill="x")
+
+def add_dining_note_box(default_text=""):
+    """Add a dining note box with tagging (Memorial Union & Union South)"""
+    frame = tk.Frame(dining_frame, bg="black")
+    label = tk.Label(frame, text=f"Dining Note #{len(dining_boxes)+1}:", fg="white", bg="black", font=label_font)
+    textbox = tk.Text(frame, height=4, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
+    if default_text:
+        textbox.insert("1.0", default_text)
+    label.pack(anchor="w")
+    textbox.pack(fill="both", expand=True, padx=5)
+    frame.pack(pady=5, fill="x")
+    configure_text_box(textbox)
+    dining_boxes.append(textbox)
+    # Tagging
+    tag_vars = []
+    tag_dropdowns = []
+    tag_frame = tk.Frame(frame, bg="black")
+    tag_frame.pack(anchor="w", pady=(2, 0))
+    add_tagging_to_note(tag_frame, DINING_TAG_OPTIONS, tag_vars, tag_dropdowns)
+    dining_note_tags.append(tag_vars)
+    frame.pack(pady=5, fill="x")
+
+def add_hotel_note_box(default_text=""):
+    """Add a hotel note box (Memorial Union & Union South)"""
+    frame = tk.Frame(hotel_frame, bg="black")
+    label = tk.Label(frame, text=f"Hotel Note #{len(hotel_boxes)+1}:", fg="white", bg="black", font=label_font)
+    textbox = tk.Text(frame, height=3, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
+    if default_text:
+        textbox.insert("1.0", default_text)
+    label.pack(anchor="w")
+    textbox.pack(fill="both", expand=True, padx=5)
+    configure_text_box(textbox, min_height=3)
+    hotel_boxes.append(textbox)
+    frame.pack(pady=5, fill="x")
+
+def add_misc_note_box(default_text=""):
+    """Add a miscellaneous note box (Memorial Union & Union South)"""
+    frame = tk.Frame(misc_frame, bg="black")
+    label = tk.Label(frame, text=f"Misc Note #{len(misc_boxes)+1}:", fg="white", bg="black", font=label_font)
+    textbox = tk.Text(frame, height=4, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
+    if default_text:
+        textbox.insert("1.0", default_text)
+    label.pack(anchor="w")
+    textbox.pack(fill="both", expand=True, padx=5)
+    frame.pack(pady=5, fill="x")
+    configure_text_box(textbox)
+    misc_boxes.append(textbox)
+    frame.pack(pady=5, fill="x")
+
+# === Memorial Union Specific Functions ===
+
+def add_carding_note_box(default_text=""):
+    """Add a carding note box (Memorial Union only)"""
+    frame = tk.Frame(carding_frame, bg="black")
+    label = tk.Label(frame, text=f"Carding Run Note #{len(carding_boxes)+1}:", fg="white", bg="black", font=label_font)
+    textbox = tk.Text(frame, height=3, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
+    if default_text:
+        textbox.insert("1.0", default_text)
+    label.pack(anchor="w")
+    textbox.pack(fill="both", expand=True, padx=5)
+    frame.pack(pady=5, fill="x")
+    configure_text_box(textbox, min_height=3)
+    carding_boxes.append(textbox)
+
+def add_terrace_note_box(default_text=""):
+    """Add a terrace traffic note box (Memorial Union only)"""
+    frame = tk.Frame(terrace_frame, bg="black")
+    label = tk.Label(frame, text=f"Terrace Traffic Note #{len(terrace_boxes)+1}:", fg="white", bg="black", font=label_font)
+    textbox = tk.Text(frame, height=4, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
+    if default_text:
+        textbox.insert("1.0", default_text)
+    label.pack(anchor="w")
+    textbox.pack(fill="both", expand=True, padx=5)
+    frame.pack(pady=5, fill="x")
+    configure_text_box(textbox)
+    terrace_boxes.append(textbox)
+
+def add_enforcement_note_box(default_text=""):
+    """Add an enforcement text note box with tagging (Memorial Union only)"""
+    frame = tk.Frame(enforcement_frame, bg="black")
+    label = tk.Label(frame, text=f"Enforcement Note #{len(enforcement_boxes)+1}:", fg="white", bg="black", font=label_font)
+    textbox = tk.Text(frame, height=4, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
+    if default_text:
+        textbox.insert("1.0", default_text)
+    label.pack(anchor="w")
+    textbox.pack(fill="both", expand=True, padx=5)
+    configure_text_box(textbox)
+    enforcement_boxes.append(textbox)
+    # Tagging
+    tag_vars = []
+    tag_dropdowns = []
+    tag_frame = tk.Frame(frame, bg="black")
+    tag_frame.pack(anchor="w", pady=(2, 0))
+    add_tagging_to_note(tag_frame, TERRACE_TAG_OPTIONS, tag_vars, tag_dropdowns)
+    enforcement_note_tags.append(tag_vars)
+    # Add to components and reorder
+    enforcement_components.append(frame)
+    reorder_enforcement_components()
+
+def add_enforcement_image():
+    """Add an enforcement image with description and tagging (Memorial Union only).
+    Returns dict with image info and pushes to enforcement_items global list."""
+    image_frame = tk.Frame(enforcement_frame, bg="black")
+    
+    # Label for the image section
+    image_label = tk.Label(image_frame, text=f"Enforcement Image #{len(enforcement_images)+1}:", fg="white", bg="black", font=label_font)
+    image_label.pack(anchor="w")
+    
+    # Frame for image upload button and status
+    upload_frame = tk.Frame(image_frame, bg="black")
+    upload_frame.pack(fill="x", pady=2)
+    
+    # Variable to store image path
+    image_path_var = tk.StringVar()
+    enforcement_images.insert(0, image_path_var)  # Insert at beginning
+    
+    # Status label
+    status_label = tk.Label(upload_frame, text="No image selected", fg="gray", bg="black", font=entry_font)
+    status_label.pack(side="left", padx=(0, 10))
+    
+    def select_image():
+        file_path = filedialog.askopenfilename(
+            title="Select Enforcement Image",
+            filetypes=[("Image files", "*.png *.jpg *.jpeg *.gif *.bmp"), ("All files", "*.*")]
+        )
+        if file_path:
+            image_path_var.set(file_path)
+            # RULE: Missing image files - still show filename; allow reselection
+            import os
+            if os.path.exists(file_path):
+                status_label.config(text=f"Selected: {os.path.basename(file_path)}", fg="green")
+            else:
+                status_label.config(text=f"Missing: {os.path.basename(file_path)} (click to reselect)", fg="orange")
+    
+    # Update status when image path is set programmatically (for draft loading)
+    def update_status_from_var(*args):
+        current_path = image_path_var.get()
+        if current_path:
+            import os
+            if os.path.exists(current_path):
+                status_label.config(text=f"Selected: {os.path.basename(current_path)}", fg="green")
+            else:
+                # RULE: Missing image files - still show filename; allow reselection
+                status_label.config(text=f"Missing: {os.path.basename(current_path)} (click to reselect)", fg="orange")
+        else:
+            status_label.config(text="No image selected", fg="gray")
+    
+    # Trace the variable to update status when set programmatically
+    image_path_var.trace_add("write", update_status_from_var)
+    
+    upload_btn = tk.Button(upload_frame, text="Select Image", command=select_image,
+                         bg="white", fg="black", font=("Helvetica", 9, "bold"))
+    upload_btn.pack(side="left")
+    
+    # Text box for image description
+    desc_label = tk.Label(image_frame, text="Description of enforcement action:", fg="white", bg="black", font=label_font)
+    desc_label.pack(anchor="w", pady=(5, 0))
+    
+    textbox = tk.Text(image_frame, height=3, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
+    textbox.pack(fill="x", padx=5)
+    configure_text_box(textbox, min_height=3)
+    enforcement_boxes.insert(0, textbox)  # Insert at beginning
+    
+    # Tagging
+    tag_vars = []
+    tag_dropdowns = []
+    tag_frame = tk.Frame(image_frame, bg="black")
+    tag_frame.pack(anchor="w", pady=(2, 0))
+    add_tagging_to_note(tag_frame, TERRACE_TAG_OPTIONS, tag_vars, tag_dropdowns)
+    enforcement_note_tags.insert(0, tag_vars)  # Insert at beginning
+    
+    # Pack the image frame and reorder all components
+    enforcement_components.insert(0, image_frame)
+    reorder_enforcement_components()
+    
+    # Create and store the enforcement item dict
+    enforcement_item = {
+        "type": "image",
+        "image_path": image_path_var,
+        "description_textbox": textbox,
+        "tags": tag_vars,
+        "frame": image_frame
+    }
+    enforcement_items.append(enforcement_item)
+    
+    return enforcement_item
+
+def add_alumni_note_box(default_text=""):
+    """Add an alumni park note box with tagging (Memorial Union only)"""
+    frame = tk.Frame(alumni_frame, bg="black")
+    label = tk.Label(frame, text=f"Alumni Park Note #{len(alumni_boxes)+1}:", fg="white", bg="black", font=label_font)
+    textbox = tk.Text(frame, height=3, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
+    if default_text:
+        textbox.insert("1.0", default_text)
+    label.pack(anchor="w")
+    textbox.pack(fill="both", expand=True, padx=5)
+    frame.pack(pady=5, fill="x")
+    configure_text_box(textbox, min_height=3)
+    alumni_boxes.append(textbox)
+    # Tagging
+    tag_vars = []
+    tag_dropdowns = []
+    tag_frame = tk.Frame(frame, bg="black")
+    tag_frame.pack(anchor="w", pady=(2, 0))
+    add_tagging_to_note(tag_frame, TERRACE_TAG_OPTIONS, tag_vars, tag_dropdowns)
+    alumni_note_tags.append(tag_vars)
+    frame.pack(pady=5, fill="x")
+
+def add_pier_note_box(default_text=""):
+    """Add a pier note box with tagging (Memorial Union only)"""
+    frame = tk.Frame(pier_frame, bg="black")
+    label = tk.Label(frame, text=f"Pier Note #{len(pier_boxes)+1}:", fg="white", bg="black", font=label_font)
+    textbox = tk.Text(frame, height=3, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
+    if default_text:
+        textbox.insert("1.0", default_text)
+    label.pack(anchor="w")
+    textbox.pack(fill="both", expand=True, padx=5)
+    frame.pack(pady=5, fill="x")
+    configure_text_box(textbox, min_height=3)
+    pier_boxes.append(textbox)
+    # Tagging
+    tag_vars = []
+    tag_dropdowns = []
+    tag_frame = tk.Frame(frame, bg="black")
+    tag_frame.pack(anchor="w", pady=(2, 0))
+    add_tagging_to_note(tag_frame, TERRACE_TAG_OPTIONS, tag_vars, tag_dropdowns)
+    pier_note_tags.append(tag_vars)
+    frame.pack(pady=5, fill="x")
+
+# === Red Gym Specific Functions ===
+
+def add_red_gym_mail_box(default_text=""):
+    """Add a mail note box (Red Gym only)"""
+    frame = tk.Frame(mail_frame, bg="black")
+    label = tk.Label(frame, text=f"Mail Note #{len(red_gym_mail_boxes)+1}:", fg="white", bg="black", font=label_font)
+    textbox = tk.Text(frame, height=3, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
+    if default_text:
+        textbox.insert("1.0", default_text)
+    label.pack(anchor="w")
+    textbox.pack(fill="both", expand=True, padx=5)
+    frame.pack(pady=5, fill="x")
+    configure_text_box(textbox, min_height=3)
+    red_gym_mail_boxes.append(textbox)
+
+def add_red_gym_misc_box(default_text=""):
+    """Add a misc note box with tagging (Red Gym only)"""
+    frame = tk.Frame(misc_frame, bg="black")
+    label = tk.Label(frame, text=f"Misc Note #{len(red_gym_misc_boxes)+1}:", fg="white", bg="black", font=label_font)
+    textbox = tk.Text(frame, height=3, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
+    if default_text:
+        textbox.insert("1.0", default_text)
+    label.pack(anchor="w")
+    textbox.pack(fill="both", expand=True, padx=5)
+    frame.pack(pady=5, fill="x")
+    configure_text_box(textbox, min_height=3)
+    red_gym_misc_boxes.append(textbox)
+    
+    # Tagging for Red Gym misc (with ability to add multiple tags)
+    tag_vars = []
+    tag_dropdowns = []
+    tag_frame = tk.Frame(frame, bg="black")
+    tag_frame.pack(anchor="w", pady=(2, 0))
+    
+    # Use the standard tagging function for consistency
+    add_tagging_to_note(tag_frame, RED_GYM_MISC_TAG_OPTIONS, tag_vars, tag_dropdowns)
+    misc_note_tags.append(tag_vars)
+    frame.pack(pady=5, fill="x")
 
 # Function to configure tabs based on selected building
 def configure_tabs_for_building():
@@ -357,10 +979,33 @@ def configure_tabs_for_building():
     # Continue with the rest of the UI setup
     setup_ui_components()
     
+    # Start autosave after UI is configured
+    start_autosave(interval_min=3)
+    
+    # Handle main window close event - exit application properly
+    def on_main_close():
+        # Show confirmation dialog
+        response = messagebox.askyesno(
+            "Confirm Exit", 
+            "Are you sure you want to close the Night Report Generator?\n\nAny unsaved changes will be lost.",
+            icon='warning'
+        )
+        if response:  # User clicked "Yes"
+            stop_autosave()  # Stop any running autosave
+            root.quit()  # Exit the mainloop
+            root.destroy()  # Destroy the root window
+    
+    root.protocol("WM_DELETE_WINDOW", on_main_close)
+    
     # Now show the main window
     root.deiconify()
 
 def setup_ui_components():
+    global traffic_notes_frame, mechanical_notes_frame, production_notes_frame, patron_notes_frame
+    global cash_frame, dining_frame, hotel_frame, misc_frame
+    global carding_frame, terrace_frame, enforcement_frame, alumni_frame, pier_frame
+    global mail_frame, access_notes_container, decibel_rows_container
+    
     # === Supervisor Info tab ===
     today_str = datetime.now().strftime("%A, %B %d, %Y")
     add_labeled_entry(tabs["Supervisor Info"], "Date", "date", default=today_str)
@@ -380,27 +1025,14 @@ def setup_ui_components():
         add_labeled_entry(tabs["Supervisor Info"], "Catering Supervisor(s)", "catering")
         add_labeled_entry(tabs["Supervisor Info"], "Event Manager(s)", "eventmanagers")
         add_labeled_entry(tabs["Supervisor Info"], "CAVR Desk Staff", "cavr")
-
+    
     # === Building Traffic Tab ===
     # Create a container frame inside the tab to hold text boxes
     traffic_tab = tabs["Building Traffic"]
     traffic_notes_frame = tk.Frame(traffic_tab, bg="black")
     traffic_notes_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
 
-    def add_building_traffic_box(default_text=""):
-        frame = tk.Frame(traffic_notes_frame, bg="black")
-        label = tk.Label(frame, text=f"Building Traffic Note #{len(building_traffic_boxes)+1}:", fg="white", bg="black", font=label_font)
-        textbox = tk.Text(frame, height=4, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
-        if default_text:
-            textbox.insert("1.0", default_text)
-        label.pack(anchor="w")
-        textbox.pack(fill="both", expand=True, padx=5)
-        frame.pack(pady=5, fill="x")
-        # Configure text box to auto-resize
-        configure_text_box(textbox)
-        building_traffic_boxes.append(textbox)
-
-    # Add first required box
+    # Add first required box (using promoted function)
     add_building_traffic_box()
 
     # Add the + Add Note button, stays at bottom
@@ -496,18 +1128,7 @@ def setup_ui_components():
         mail_frame = tk.Frame(mail_tab, bg="black")
         mail_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
         
-        def add_red_gym_mail_box(default_text=""):
-            frame = tk.Frame(mail_frame, bg="black")
-            label = tk.Label(frame, text=f"Mail Note #{len(red_gym_mail_boxes)+1}:", fg="white", bg="black", font=label_font)
-            textbox = tk.Text(frame, height=3, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
-            if default_text:
-                textbox.insert("1.0", default_text)
-            label.pack(anchor="w")
-            textbox.pack(fill="both", expand=True, padx=5)
-            frame.pack(pady=5, fill="x")
-            configure_text_box(textbox, min_height=3)
-            red_gym_mail_boxes.append(textbox)
-        
+        # Use promoted function
         add_red_gym_mail_box()
         
         tk.Button(
@@ -521,34 +1142,7 @@ def setup_ui_components():
         misc_frame = tk.Frame(misc_tab, bg="black")
         misc_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
         
-        def add_red_gym_misc_box(default_text=""):
-            frame = tk.Frame(misc_frame, bg="black")
-            label = tk.Label(frame, text=f"Misc Note #{len(red_gym_misc_boxes)+1}:", fg="white", bg="black", font=label_font)
-            textbox = tk.Text(frame, height=3, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
-            if default_text:
-                textbox.insert("1.0", default_text)
-            label.pack(anchor="w")
-            textbox.pack(fill="both", expand=True, padx=5)
-            frame.pack(pady=5, fill="x")
-            configure_text_box(textbox, min_height=3)
-            red_gym_misc_boxes.append(textbox)
-            
-            # Tagging for Red Gym misc (single dropdown only)
-            tag_vars = []
-            tag_dropdowns = []
-            tag_frame = tk.Frame(frame, bg="black")
-            tag_frame.pack(anchor="w", pady=(2, 0))
-            
-            # Add single dropdown without the ability to add more
-            var = tk.StringVar(value="None")
-            dropdown = ttk.Combobox(tag_frame, textvariable=var, values=RED_GYM_MISC_TAG_OPTIONS, state="readonly", width=30)
-            dropdown.pack(side="left", padx=(0, 5))
-            tag_vars.append(var)
-            tag_dropdowns.append(dropdown)
-            
-            misc_note_tags.append(tag_vars)
-            frame.pack(pady=5, fill="x")
-        
+        # Use promoted function
         add_red_gym_misc_box()
         
         tk.Button(
@@ -556,12 +1150,23 @@ def setup_ui_components():
             bg="white", fg="black", font=("Helvetica", 10, "bold")
         ).pack(pady=10)
         
-        # === Generate Report Button ===
-        submit_btn = tk.Button(
-            root, text="Generate Report", command=generate_report,
-            bg="white", fg="black", font=("Helvetica", 12, "bold"), padx=10, pady=6
+        # === Generate Report Buttons ===
+        button_frame = tk.Frame(root, bg="black")
+        button_frame.pack(pady=10)
+        
+        save_btn = tk.Button(
+            button_frame, text="Save Report", command=save_report_draft,
+            bg="white", fg="black", font=("Helvetica", 12, "bold"), padx=10, pady=6,
+            relief="raised", activebackground="white", activeforeground="black"
         )
-        submit_btn.pack(pady=10)
+        save_btn.pack(side="left", padx=8)
+        
+        submit_btn = tk.Button(
+            button_frame, text="End Shift", command=end_shift_and_generate,
+            bg="white", fg="black", font=("Helvetica", 12, "bold"), padx=10, pady=6,
+            relief="raised", activebackground="white", activeforeground="black"
+        )
+        submit_btn.pack(side="left")
         
         return  # Exit early for Red Gym
     
@@ -606,7 +1211,10 @@ def setup_ui_components():
                     dropdown.add_tag_btn.destroy()
                     delattr(dropdown, 'add_tag_btn')
             dropdown.bind("<<ComboboxSelected>>", on_tag_change)
-
+            return add_tag_dropdown  # Return function for programmatic access
+        
+        # Store the add_tag_dropdown function for later use during restoration
+        tag_frame.add_tag_dropdown = add_tag_dropdown
         add_tag_dropdown()  # Add the first dropdown
         mechanical_note_tags.append(tag_vars)
         frame.pack(pady=5, fill="x")
@@ -625,27 +1233,7 @@ def setup_ui_components():
     production_notes_frame = tk.Frame(tabs["Production"], bg="black")
     production_notes_frame.pack(fill="x", padx=10, pady=(10, 5))
 
-    def add_production_note_box(default_text=""):
-        frame = tk.Frame(production_notes_frame, bg="black")
-        label = tk.Label(frame, text=f"Production Note #{len(production_boxes)+1}:", fg="white", bg="black", font=label_font)
-        textbox = tk.Text(frame, height=4, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
-        if default_text:
-            textbox.insert("1.0", default_text)
-        label.pack(anchor="w")
-        textbox.pack(fill="both", expand=True, padx=5)
-        frame.pack(pady=5, fill="x")
-        configure_text_box(textbox)
-        production_boxes.append(textbox)
-        # Tagging
-        tag_vars = []
-        tag_dropdowns = []
-        tag_frame = tk.Frame(frame, bg="black")
-        tag_frame.pack(anchor="w", pady=(2, 0))
-        add_tagging_to_note(tag_frame, PRODUCTION_TAG_OPTIONS, tag_vars, tag_dropdowns)
-        production_note_tags.append(tag_vars)
-        frame.pack(pady=5, fill="x")
-
-    # Add first required note
+    # Use promoted function
     add_production_note_box()
 
     # Button to add more production notes
@@ -666,32 +1254,7 @@ def setup_ui_components():
     decibel_rows_container = tk.Frame(decibel_frame, bg="black")
     decibel_rows_container.pack(fill="x", expand=True)
 
-    def add_decibel_row():
-        row_frame = tk.Frame(decibel_rows_container, bg="black")
-        time_entry = tk.Entry(row_frame, width=15, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font)
-        reading_entry = tk.Entry(row_frame, width=15, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font)
-        location_entry = tk.Entry(row_frame, width=40, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font)
-
-        time_entry.insert(0, "Time")
-        reading_entry.insert(0, "Reading (db)")
-        location_entry.insert(0, "Location")
-
-        # Add focus event handlers to select all text when clicked
-        def on_focus_in(event):
-            event.widget.select_range(0, tk.END)
-            
-        time_entry.bind("<FocusIn>", on_focus_in)
-        reading_entry.bind("<FocusIn>", on_focus_in)
-        location_entry.bind("<FocusIn>", on_focus_in)
-
-        time_entry.pack(side="left", padx=5)
-        reading_entry.pack(side="left", padx=5)
-        location_entry.pack(side="left", padx=5)
-        row_frame.pack(pady=3, anchor="w", fill="x")
-        
-        decibel_entries.append((time_entry, reading_entry, location_entry))
-
-    # Add first decibel row
+    # Use promoted function
     add_decibel_row()
 
     # Button to add more decibel rows - kept outside the container
@@ -705,26 +1268,7 @@ def setup_ui_components():
     patron_notes_frame = tk.Frame(tabs["Patron Services"], bg="black")
     patron_notes_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
 
-    def add_patron_note_box(default_text=""):
-        frame = tk.Frame(patron_notes_frame, bg="black")
-        label = tk.Label(frame, text=f"Patron Note #{len(patron_boxes)+1}:", fg="white", bg="black", font=label_font)
-        textbox = tk.Text(frame, height=6, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
-        if default_text:
-            textbox.insert("1.0", default_text)
-        label.pack(anchor="w")
-        textbox.pack(fill="both", expand=True, padx=5)
-        configure_text_box(textbox, min_height=6)
-        patron_boxes.append(textbox)
-        # Tagging
-        tag_vars = []
-        tag_dropdowns = []
-        tag_frame = tk.Frame(frame, bg="black")
-        tag_frame.pack(anchor="w", pady=(2, 0))
-        add_tagging_to_note(tag_frame, PATRON_TAG_OPTIONS, tag_vars, tag_dropdowns)
-        patron_note_tags.append(tag_vars)
-        frame.pack(pady=5, fill="x")
-
-    # Add first required box
+    # Use promoted function
     add_patron_note_box()
 
     # Add button to add more notes
@@ -783,25 +1327,7 @@ def setup_ui_components():
     access_notes_container = tk.Frame(access_frame, bg="black")
     access_notes_container.pack(fill="both", expand=True)
 
-    def add_access_note():
-        frame = tk.Frame(access_notes_container, bg="black")
-        label = tk.Label(frame, text=f"Access Note #{len(access_note_boxes)+1}:", fg="white", bg="black", font=label_font)
-        textbox = tk.Text(frame, height=3, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
-        label.pack(anchor="w")
-        textbox.pack(fill="x", expand=True, padx=5)
-        frame.pack(pady=5, fill="x")
-        configure_text_box(textbox, min_height=3)
-        access_note_boxes.append(textbox)
-        # Tagging
-        tag_vars = []
-        tag_dropdowns = []
-        tag_frame = tk.Frame(frame, bg="black")
-        tag_frame.pack(anchor="w", pady=(2, 0))
-        add_tagging_to_note(tag_frame, ACCESS_TAG_OPTIONS, tag_vars, tag_dropdowns)
-        access_note_tags.append(tag_vars)
-        frame.pack(pady=5, fill="x")
-
-    # Add Note button
+    # Add Note button (using promoted function)
     add_note_btn = tk.Button(
         access_frame, text="+ Add Note", command=add_access_note,
         bg="white", fg="black", font=("Helvetica", 10, "bold")
@@ -812,26 +1338,7 @@ def setup_ui_components():
     cash_frame = tk.Frame(tabs["Cash Office"], bg="black")
     cash_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
 
-    def add_cash_note_box(default_text=""):
-        frame = tk.Frame(cash_frame, bg="black")
-        label = tk.Label(frame, text=f"Cash Office Note #{len(cash_boxes)+1}:", fg="white", bg="black", font=label_font)
-        textbox = tk.Text(frame, height=4, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
-        if default_text:
-            textbox.insert("1.0", default_text)
-        label.pack(anchor="w")
-        textbox.pack(fill="both", expand=True, padx=5)
-        frame.pack(pady=5, fill="x")
-        configure_text_box(textbox)
-        cash_boxes.append(textbox)
-        # Tagging
-        tag_vars = []
-        tag_dropdowns = []
-        tag_frame = tk.Frame(frame, bg="black")
-        tag_frame.pack(anchor="w", pady=(2, 0))
-        add_tagging_to_note(tag_frame, CASH_TAG_OPTIONS, tag_vars, tag_dropdowns)
-        cash_note_tags.append(tag_vars)
-        frame.pack(pady=5, fill="x")
-
+    # Use promoted function
     add_cash_note_box()
 
     add_cash_btn = tk.Button(
@@ -846,19 +1353,7 @@ def setup_ui_components():
         carding_frame = tk.Frame(tabs["Carding Runs"], bg="black")
         carding_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
 
-        def add_carding_note_box(default_text=""):
-            frame = tk.Frame(carding_frame, bg="black")
-            label = tk.Label(frame, text=f"Carding Run Note #{len(carding_boxes)+1}:", fg="white", bg="black", font=label_font)
-            textbox = tk.Text(frame, height=3, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
-            if default_text:
-                textbox.insert("1.0", default_text)
-            label.pack(anchor="w")
-            textbox.pack(fill="both", expand=True, padx=5)
-            frame.pack(pady=5, fill="x")
-            configure_text_box(textbox, min_height=3)
-            carding_boxes.append(textbox)
-
-        # Add first required note
+        # Use promoted function
         add_carding_note_box()
 
         # Add note button
@@ -872,25 +1367,7 @@ def setup_ui_components():
         terrace_frame = tk.Frame(tabs["Terrace Traffic"], bg="black")
         terrace_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
 
-        def add_terrace_note_box(default_text=""):
-            frame = tk.Frame(terrace_frame, bg="black")
-            label = tk.Label(frame, text=f"Terrace Traffic Note #{len(terrace_boxes)+1}:", fg="white", bg="black", font=label_font)
-            textbox = tk.Text(frame, height=4, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
-            if default_text:
-                textbox.insert("1.0", default_text)
-            label.pack(anchor="w")
-            textbox.pack(fill="both", expand=True, padx=5)
-            frame.pack(pady=5, fill="x")
-            configure_text_box(textbox)
-            terrace_boxes.append(textbox)
-            # Tagging
-            tag_vars = []
-            tag_dropdowns = []
-            tag_frame = tk.Frame(frame, bg="black")
-            tag_frame.pack(anchor="w", pady=(2, 0))
-            add_tagging_to_note(tag_frame, TERRACE_TAG_OPTIONS, tag_vars, tag_dropdowns)
-            terrace_note_tags.append(tag_vars)
-            frame.pack(pady=5, fill="x")
+        # Use promoted function
         add_terrace_note_box()
 
         add_terrace_btn = tk.Button(
@@ -903,96 +1380,7 @@ def setup_ui_components():
         enforcement_frame = tk.Frame(tabs["Terrace Enforcement"], bg="black")
         enforcement_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
 
-        # Keep track of enforcement components for proper ordering
-        enforcement_components = []
-
-        def add_enforcement_image():
-            image_frame = tk.Frame(enforcement_frame, bg="black")
-            
-            # Label for the image section
-            image_label = tk.Label(image_frame, text=f"Enforcement Image #{len(enforcement_images)+1}:", fg="white", bg="black", font=label_font)
-            image_label.pack(anchor="w")
-            
-            # Frame for image upload button and status
-            upload_frame = tk.Frame(image_frame, bg="black")
-            upload_frame.pack(fill="x", pady=2)
-            
-            # Variable to store image path
-            image_path_var = tk.StringVar()
-            enforcement_images.insert(0, image_path_var)  # Insert at beginning
-            
-            # Status label
-            status_label = tk.Label(upload_frame, text="No image selected", fg="gray", bg="black", font=entry_font)
-            status_label.pack(side="left", padx=(0, 10))
-            
-            def select_image():
-                file_path = filedialog.askopenfilename(
-                    title="Select Image",
-                    filetypes=[
-                        ("Image files", "*.jpg *.jpeg *.png *.gif *.bmp"),
-                        ("All files", "*.*")
-                    ]
-                )
-                if file_path:
-                    image_path_var.set(file_path)
-                    filename = file_path.split('/')[-1]  # Get just the filename
-                    status_label.config(text=f"Selected: {filename}", fg="white")
-            
-            upload_btn = tk.Button(upload_frame, text="Select Image", command=select_image,
-                                 bg="white", fg="black", font=("Helvetica", 9, "bold"))
-            upload_btn.pack(side="left")
-            
-            # Text box for image description
-            desc_label = tk.Label(image_frame, text="Description of enforcement action:", fg="white", bg="black", font=label_font)
-            desc_label.pack(anchor="w", pady=(5, 0))
-            
-            textbox = tk.Text(image_frame, height=3, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
-            textbox.pack(fill="x", padx=5)
-            configure_text_box(textbox, min_height=3)
-            enforcement_boxes.insert(0, textbox)  # Insert at beginning
-            
-            # Tagging
-            tag_vars = []
-            tag_dropdowns = []
-            tag_frame = tk.Frame(image_frame, bg="black")
-            tag_frame.pack(anchor="w", pady=(2, 0))
-            add_tagging_to_note(tag_frame, TERRACE_TAG_OPTIONS, tag_vars, tag_dropdowns)
-            enforcement_note_tags.insert(0, tag_vars)  # Insert at beginning
-            
-            # Pack the image frame and reorder all components
-            enforcement_components.insert(0, image_frame)
-            reorder_enforcement_components()
-
-        def add_enforcement_note_box(default_text=""):
-            frame = tk.Frame(enforcement_frame, bg="black")
-            label = tk.Label(frame, text=f"Enforcement Note #{len(enforcement_boxes)+1}:", fg="white", bg="black", font=label_font)
-            textbox = tk.Text(frame, height=4, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
-            if default_text:
-                textbox.insert("1.0", default_text)
-            label.pack(anchor="w")
-            textbox.pack(fill="both", expand=True, padx=5)
-            configure_text_box(textbox)
-            enforcement_boxes.append(textbox)
-            # Tagging
-            tag_vars = []
-            tag_dropdowns = []
-            tag_frame = tk.Frame(frame, bg="black")
-            tag_frame.pack(anchor="w", pady=(2, 0))
-            add_tagging_to_note(tag_frame, TERRACE_TAG_OPTIONS, tag_vars, tag_dropdowns)
-            enforcement_note_tags.append(tag_vars)
-            
-            # Add to components and reorder
-            enforcement_components.append(frame)
-            reorder_enforcement_components()
-
-        def reorder_enforcement_components():
-            # Forget all components
-            for component in enforcement_components:
-                component.pack_forget()
-            # Re-pack in correct order
-            for component in enforcement_components:
-                component.pack(fill="x", pady=5)
-
+        # Use promoted functions
         # Button to add enforcement image with description
         add_image_btn = tk.Button(
             enforcement_frame, text="+ Add Enforcement Image", command=add_enforcement_image,
@@ -1012,25 +1400,7 @@ def setup_ui_components():
         alumni_frame = tk.Frame(tabs["Alumni Park"], bg="black")
         alumni_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
 
-        def add_alumni_note_box(default_text=""):
-            frame = tk.Frame(alumni_frame, bg="black")
-            label = tk.Label(frame, text=f"Alumni Park Note #{len(alumni_boxes)+1}:", fg="white", bg="black", font=label_font)
-            textbox = tk.Text(frame, height=3, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
-            if default_text:
-                textbox.insert("1.0", default_text)
-            label.pack(anchor="w")
-            textbox.pack(fill="both", expand=True, padx=5)
-            frame.pack(pady=5, fill="x")
-            configure_text_box(textbox, min_height=3)
-            alumni_boxes.append(textbox)
-            # Tagging
-            tag_vars = []
-            tag_dropdowns = []
-            tag_frame = tk.Frame(frame, bg="black")
-            tag_frame.pack(anchor="w", pady=(2, 0))
-            add_tagging_to_note(tag_frame, TERRACE_TAG_OPTIONS, tag_vars, tag_dropdowns)
-            alumni_note_tags.append(tag_vars)
-            frame.pack(pady=5, fill="x")
+        # Use promoted function
         add_alumni_note_box()
 
         tk.Button(
@@ -1042,25 +1412,7 @@ def setup_ui_components():
         pier_frame = tk.Frame(tabs["Goodspeed Pier"], bg="black")
         pier_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
 
-        def add_pier_note_box(default_text=""):
-            frame = tk.Frame(pier_frame, bg="black")
-            label = tk.Label(frame, text=f"Pier Note #{len(pier_boxes)+1}:", fg="white", bg="black", font=label_font)
-            textbox = tk.Text(frame, height=3, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
-            if default_text:
-                textbox.insert("1.0", default_text)
-            label.pack(anchor="w")
-            textbox.pack(fill="both", expand=True, padx=5)
-            frame.pack(pady=5, fill="x")
-            configure_text_box(textbox, min_height=3)
-            pier_boxes.append(textbox)
-            # Tagging
-            tag_vars = []
-            tag_dropdowns = []
-            tag_frame = tk.Frame(frame, bg="black")
-            tag_frame.pack(anchor="w", pady=(2, 0))
-            add_tagging_to_note(tag_frame, TERRACE_TAG_OPTIONS, tag_vars, tag_dropdowns)
-            pier_note_tags.append(tag_vars)
-            frame.pack(pady=5, fill="x")
+        # Use promoted function
         add_pier_note_box()
 
         tk.Button(
@@ -1072,25 +1424,7 @@ def setup_ui_components():
     dining_frame = tk.Frame(tabs["Dining & Markets"], bg="black")
     dining_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
 
-    def add_dining_note_box(default_text=""):
-        frame = tk.Frame(dining_frame, bg="black")
-        label = tk.Label(frame, text=f"Dining Note #{len(dining_boxes)+1}:", fg="white", bg="black", font=label_font)
-        textbox = tk.Text(frame, height=4, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
-        if default_text:
-            textbox.insert("1.0", default_text)
-        label.pack(anchor="w")
-        textbox.pack(fill="both", expand=True, padx=5)
-        frame.pack(pady=5, fill="x")
-        configure_text_box(textbox)
-        dining_boxes.append(textbox)
-        # Tagging
-        tag_vars = []
-        tag_dropdowns = []
-        tag_frame = tk.Frame(frame, bg="black")
-        tag_frame.pack(anchor="w", pady=(2, 0))
-        add_tagging_to_note(tag_frame, DINING_TAG_OPTIONS, tag_vars, tag_dropdowns)
-        dining_note_tags.append(tag_vars)
-        frame.pack(pady=5, fill="x")
+    # Use promoted function
     add_dining_note_box()
 
     tk.Button(
@@ -1102,17 +1436,7 @@ def setup_ui_components():
     hotel_frame = tk.Frame(tabs["Hotel"], bg="black")
     hotel_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
 
-    def add_hotel_note_box(default_text=""):
-        frame = tk.Frame(hotel_frame, bg="black")
-        label = tk.Label(frame, text=f"Hotel Note #{len(hotel_boxes)+1}:", fg="white", bg="black", font=label_font)
-        textbox = tk.Text(frame, height=3, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
-        if default_text:
-            textbox.insert("1.0", default_text)
-        label.pack(anchor="w")
-        textbox.pack(fill="both", expand=True, padx=5)
-        configure_text_box(textbox, min_height=3)
-        hotel_boxes.append(textbox)
-        frame.pack(pady=5, fill="x")
+    # Use promoted function
     add_hotel_note_box()
     tk.Button(
         tabs["Hotel"], text="+ Add Note", command=add_hotel_note_box,
@@ -1123,18 +1447,7 @@ def setup_ui_components():
     misc_frame = tk.Frame(tabs["Misc"], bg="black")
     misc_frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
 
-    def add_misc_note_box(default_text=""):
-        frame = tk.Frame(misc_frame, bg="black")
-        label = tk.Label(frame, text=f"Misc Note #{len(misc_boxes)+1}:", fg="white", bg="black", font=label_font)
-        textbox = tk.Text(frame, height=4, width=80, bg=entry_bg, fg=entry_fg, insertbackground="white", font=entry_font, wrap=tk.WORD)
-        if default_text:
-            textbox.insert("1.0", default_text)
-        label.pack(anchor="w")
-        textbox.pack(fill="both", expand=True, padx=5)
-        frame.pack(pady=5, fill="x")
-        configure_text_box(textbox)
-        misc_boxes.append(textbox)
-        frame.pack(pady=5, fill="x")
+    # Use promoted function
     add_misc_note_box()
 
     tk.Button(
@@ -1176,14 +1489,1309 @@ def setup_ui_components():
             "names": names_entry
         }
 
-    # === Generate Report Button ===
-    submit_btn = tk.Button(
-        root, text="Generate Report", command=generate_report,
-        bg="white", fg="black", font=("Helvetica", 12, "bold"), padx=10, pady=6
+    # === Generate Report Buttons ===
+    button_frame = tk.Frame(root, bg="black")
+    button_frame.pack(pady=10)
+    
+    save_btn = tk.Button(
+        button_frame, text="Save Report", command=save_report_draft,
+        bg="white", fg="black", font=("Helvetica", 12, "bold"), padx=10, pady=6,
+        relief="raised", activebackground="white", activeforeground="black"
     )
-    submit_btn.pack(pady=10)
+    save_btn.pack(side="left", padx=8)
+    
+    submit_btn = tk.Button(
+        button_frame, text="End Shift", command=end_shift_and_generate,
+        bg="white", fg="black", font=("Helvetica", 12, "bold"), padx=10, pady=6,
+        relief="raised", activebackground="white", activeforeground="black"
+    )
+    submit_btn.pack(side="left")
 
-# === Generate Report Logic ===
+# === Load Draft Functions ===
+def load_draft_report():
+    """Load a draft report from JSON file and restore the UI state"""
+    # Declare global variables at the start
+    global building, loaded_from_draft
+    
+    try:
+        # Determine initial directory based on existing entries
+        initial_dir = None
+        if "date" in entries and entries["date"].get():
+            try:
+                user_date = entries["date"].get()
+                parsed_date = datetime.strptime(user_date, "%A, %B %d, %Y")
+                current_year = parsed_date.strftime("%Y")
+                current_month = parsed_date.strftime("%B")
+                initial_dir = f"M:\\Sh_BM\\{building}\\Night Reports\\{current_year}\\{current_month}\\drafts"
+            except:
+                # Fall back to desktop if date parsing fails
+                initial_dir = os.path.expanduser("~/Desktop")
+        else:
+            # Default to desktop if no date entry
+            initial_dir = os.path.expanduser("~/Desktop")
+        
+        # Get the file path from user
+        file_path = filedialog.askopenfilename(
+            title="Select Draft Report to Load",
+            filetypes=[
+                ("JSON files", "*.json"),
+                ("All files", "*.*")
+            ],
+            initialdir=initial_dir
+        )
+        
+        if not file_path:
+            return  # User cancelled
+        
+        # Load and validate the JSON data
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # Validate the data structure with backward compatibility
+        if not isinstance(data, dict):
+            raise ValueError("Invalid file format: not a JSON object")
+        
+        if "building" not in data:
+            raise ValueError("Invalid draft file: missing 'building' field")
+        
+        # ENHANCED: Create missing 'entries' section with sensible defaults
+        if "entries" not in data:
+            data["entries"] = {}
+        
+        # ENHANCED: Ensure 'notes' section exists with sensible defaults
+        if "notes" not in data:
+            data["notes"] = {}
+        
+        # Store current state in case we need to restore on error
+        current_building = building
+        current_loaded_state = loaded_from_draft
+        
+        # Set global variables
+        building = data["building"]
+        loaded_from_draft = True
+        
+        # Clear existing tabs if they exist
+        if notebook.tabs():
+            for tab_id in notebook.tabs():
+                notebook.forget(tab_id)
+        
+        # Configure tabs for the loaded building
+        configure_tabs_for_building()
+        
+        # Populate the form with the loaded data
+        populate_form_from_data(data)
+        
+        # Show success message
+        messagebox.showinfo("Success", "Report loaded successfully!")
+        
+    except FileNotFoundError:
+        messagebox.showerror("Load Error", "The selected draft file could not be found.")
+    except json.JSONDecodeError as e:
+        messagebox.showerror("Load Error", f"Invalid JSON file: {str(e)}")
+    except ValueError as e:
+        messagebox.showerror("Load Error", str(e))
+    except Exception as e:
+        # Restore original state on any error
+        try:
+            building = current_building
+            loaded_from_draft = current_loaded_state
+        except:
+            pass
+        messagebox.showerror("Load Error", str(e))
+
+def populate_form_from_data(data):
+    """Populate the form fields with data from a loaded draft"""
+    try:
+        # Clear existing data first
+        clear_all_form_data()
+        
+        # Restore entries
+        if "entries" in data:
+            entries_data = data.get("entries", {})
+            for key, value in entries_data.items():
+                if key in entries and hasattr(entries[key], 'delete') and hasattr(entries[key], 'insert'):
+                    entries[key].delete(0, tk.END)
+                    entries[key].insert(0, str(value))
+                    # RULE: Leave everything editable
+                    try:
+                        entries[key].config(state="normal")
+                    except:
+                        pass
+        
+        # Restore building traffic notes
+        if "notes" in data and "building_traffic" in data["notes"]:
+            restore_note_section(
+                data["notes"]["building_traffic"], 
+                building_traffic_boxes,
+                add_building_traffic_box
+            )
+        
+        # Building-specific data restoration
+        if building == "Red Gym":
+            restore_red_gym_data(data)
+        else:
+            restore_union_data(data)
+            
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to populate form: {str(e)}")
+
+def clear_all_form_data():
+    """Clear all form data to prepare for loading a draft"""
+    # Clear entries
+    for entry in entries.values():
+        if hasattr(entry, 'delete'):
+            entry.delete(0, tk.END)
+    
+    # Clear building traffic boxes
+    clear_note_boxes(building_traffic_boxes)
+    
+    if building == "Red Gym":
+        clear_red_gym_data()
+    else:
+        clear_union_data()
+
+def clear_note_boxes(note_boxes):
+    """Helper to clear a list of text boxes"""
+    for box in note_boxes:
+        if hasattr(box, 'delete'):
+            box.delete("1.0", tk.END)
+            # RULE: Leave everything editable
+            try:
+                box.config(state="normal")
+            except:
+                pass
+
+def restore_note_section(note_data, note_boxes, add_function):
+    """Helper to restore a section of notes with their text content"""
+    if not note_data:
+        return
+    
+    # ENHANCED: Handle type mismatches - convert string to array if needed
+    if isinstance(note_data, str):
+        note_data = [note_data]  # Convert single string to array
+    elif not isinstance(note_data, list):
+        note_data = [str(note_data)]  # Convert other types to string array
+    
+    # RULE: Never assume counts - dynamically add rows/boxes to match JSON
+    # Ensure we have enough boxes to match the data
+    while len(note_boxes) < len(note_data):
+        add_function("")
+    
+    # RULE: Leave everything editable (state="normal")
+    # Set content for each note box
+    for i, note_text in enumerate(note_data):
+        if i < len(note_boxes):
+            # Clear and populate the text box
+            note_boxes[i].delete("1.0", tk.END)
+            note_boxes[i].insert("1.0", str(note_text))
+            
+            # Ensure text box is editable
+            try:
+                note_boxes[i].config(state="normal")
+            except:
+                pass
+
+def restore_note_section_with_tags(note_data, note_boxes, note_tags, add_function):
+    """Helper to restore a section of notes with text and tags"""
+    if not note_data:
+        return
+    
+    # ENHANCED: Handle type mismatches - convert string to array if needed
+    if isinstance(note_data, str):
+        note_data = [note_data]  # Convert single string to array
+    elif not isinstance(note_data, list):
+        note_data = [str(note_data)]  # Convert other types to string array
+    
+    # RULE: Never assume counts - dynamically add rows/boxes to match JSON
+    # Ensure we have enough boxes to match the data
+    while len(note_boxes) < len(note_data):
+        add_function("")
+    
+    # Set content for each note box
+    for i, note_entry in enumerate(note_data):
+        if i < len(note_boxes):
+            # ENHANCED: Handle mixed types within the array
+            if isinstance(note_entry, dict):
+                text = note_entry.get("text", "")
+                tags = note_entry.get("tags", [])
+            elif isinstance(note_entry, str):
+                text = note_entry
+                tags = []
+            else:
+                text = str(note_entry)
+                tags = []
+            
+            # Clear and populate the text box
+            note_boxes[i].delete("1.0", tk.END)
+            note_boxes[i].insert("1.0", text)
+            
+            # RULE: Leave everything editable (state="normal")
+            try:
+                note_boxes[i].config(state="normal")
+            except:
+                pass
+            
+            # RULE: Tag arrays vs note counts - clamp safely
+            # RULE: Set comboboxes via .set(value)
+            if i < len(note_tags) and tags:
+                # Filter out empty/None tags
+                valid_tags = [tag for tag in tags if tag and tag != "None"]
+                
+                # Ensure we have enough tag dropdowns for all valid tags
+                while len(note_tags[i]) < len(valid_tags):
+                    # Find the tag frame for this note and add more dropdowns
+                    # We need to access the parent frame's add_tag_dropdown function
+                    # Get the textbox and find its parent frame, then the tag frame
+                    textbox = note_boxes[i]
+                    note_frame = textbox.master
+                    # Look for tag frame (it should be the frame with tag dropdowns)
+                    tag_frame = None
+                    for child in note_frame.winfo_children():
+                        if hasattr(child, 'add_tag_dropdown'):
+                            tag_frame = child
+                            break
+                    
+                    if tag_frame and hasattr(tag_frame, 'add_tag_dropdown'):
+                        tag_frame.add_tag_dropdown()
+                    else:
+                        break  # Can't add more dropdowns
+                
+                # Set the tag values
+                for j, tag in enumerate(valid_tags):
+                    if j < len(note_tags[i]) and tag:
+                        try:
+                            note_tags[i][j].set(str(tag))
+                        except:
+                            pass
+                
+                # Update add tag buttons after setting values
+                # Find the tag frame and call update_add_tag_buttons if available
+                textbox = note_boxes[i]
+                note_frame = textbox.master
+                tag_frame = None
+                for child in note_frame.winfo_children():
+                    if hasattr(child, 'update_add_tag_buttons'):
+                        tag_frame = child
+                        break
+                
+                if tag_frame and hasattr(tag_frame, 'update_add_tag_buttons'):
+                    tag_frame.update_add_tag_buttons()
+
+def restore_red_gym_data(data):
+    """Restore Red Gym specific data"""
+    # Clear Red Gym specific data
+    clear_red_gym_data()
+    
+    # Building tours
+    if "red_gym_building_tours" in data and red_gym_building_tours_box:
+        red_gym_building_tours_box.delete("1.0", tk.END)
+        red_gym_building_tours_box.insert("1.0", str(data.get("red_gym_building_tours", "")))
+        # RULE: Leave everything editable
+        try:
+            red_gym_building_tours_box.config(state="normal")
+        except:
+            pass
+    
+    # Deviations count
+    if "red_gym_deviations_count" in data and red_gym_deviations_entry:
+        red_gym_deviations_entry.delete(0, tk.END)
+        red_gym_deviations_entry.insert(0, str(data.get("red_gym_deviations_count", "0")))
+        # RULE: Leave everything editable
+        try:
+            red_gym_deviations_entry.config(state="normal")
+        except:
+            pass
+        # Trigger update to create deviation boxes
+        red_gym_deviations_entry.event_generate('<KeyRelease>')
+    
+    # Deviation notes (populated after the boxes are created)
+    if "red_gym_deviation_notes" in data:
+        # RULE: Never assume counts - dynamically add to match JSON
+        def populate_deviations():
+            deviation_notes = data.get("red_gym_deviation_notes", [])
+            for i, note_text in enumerate(deviation_notes):
+                if i < len(red_gym_deviation_boxes):
+                    red_gym_deviation_boxes[i].delete("1.0", tk.END)
+                    red_gym_deviation_boxes[i].insert("1.0", str(note_text))
+                    # RULE: Leave everything editable
+                    try:
+                        red_gym_deviation_boxes[i].config(state="normal")
+                    except:
+                        pass
+        root.after(100, populate_deviations)
+    
+    # Door check
+    if "red_gym_door_check_time" in data and red_gym_door_check_time:
+        red_gym_door_check_time.delete(0, tk.END)
+        red_gym_door_check_time.insert(0, str(data.get("red_gym_door_check_time", "")))
+        # RULE: Leave everything editable
+        try:
+            red_gym_door_check_time.config(state="normal")
+        except:
+            pass
+    
+    # RULE: Set comboboxes via .set(value)
+    if "red_gym_door_check_day_type" in data and red_gym_door_check_day_type:
+        try:
+            red_gym_door_check_day_type.set(str(data.get("red_gym_door_check_day_type", "")))
+            red_gym_door_check_day_type.config(state="readonly")  # Comboboxes should be readonly
+        except:
+            pass
+    
+    # Mail notes
+    if "notes" in data and "red_gym_mail" in data["notes"]:
+        restore_note_section(
+            data["notes"]["red_gym_mail"], 
+            red_gym_mail_boxes,
+            add_red_gym_mail_box
+        )
+    
+    # Misc notes with tags
+    if "notes" in data and "red_gym_misc" in data["notes"]:
+        restore_note_section_with_tags(
+            data["notes"]["red_gym_misc"], 
+            red_gym_misc_boxes,
+            misc_note_tags,
+            add_red_gym_misc_box
+        )
+
+def restore_union_data(data):
+    """Restore Memorial Union and Union South specific data"""
+    # Clear union specific data
+    clear_union_data()
+    
+    # Mechanical notes with tags
+    if "notes" in data and "mechanical" in data["notes"]:
+        restore_note_section_with_tags(
+            data["notes"]["mechanical"], 
+            mechanical_boxes,
+            mechanical_note_tags,
+            add_mechanical_box
+        )
+    
+    # Production notes with tags
+    if "notes" in data and "production" in data["notes"]:
+        restore_note_section_with_tags(
+            data["notes"]["production"], 
+            production_boxes,
+            production_note_tags,
+            add_production_note_box
+        )
+    
+    # Decibel readings
+    if "decibel_readings" in data:
+        # RULE: Never assume counts - dynamically add rows to match JSON
+        decibel_data = data.get("decibel_readings", [])
+        
+        # Ensure we have enough rows to match the data
+        while len(decibel_entries) < len(decibel_data):
+            add_decibel_row()
+        
+        # Populate decibel readings
+        for i, reading_data in enumerate(decibel_data):
+            if i < len(decibel_entries):
+                time_entry, reading_entry, location_entry = decibel_entries[i]
+                
+                # RULE: Be backward-compatible - use .get(...) with defaults
+                time_entry.delete(0, tk.END)
+                time_entry.insert(0, str(reading_data.get("time", "")))
+                reading_entry.delete(0, tk.END)  
+                reading_entry.insert(0, str(reading_data.get("reading", "")))
+                location_entry.delete(0, tk.END)
+                location_entry.insert(0, str(reading_data.get("location", "")))
+                
+                # RULE: Leave everything editable
+                try:
+                    time_entry.config(state="normal")
+                    reading_entry.config(state="normal")
+                    location_entry.config(state="normal")
+                except:
+                    pass
+    
+    # Patron notes with tags
+    if "notes" in data and "patron" in data["notes"]:
+        restore_note_section_with_tags(
+            data["notes"]["patron"], 
+            patron_boxes,
+            patron_note_tags,
+            add_patron_note_box
+        )
+    
+    # Access inputs
+    if "access_inputs" in data:
+        access_data = data.get("access_inputs", {})
+        for key, value in access_data.items():
+            if key in access_inputs:
+                # RULE: Set comboboxes via .set(value) and entries via insert
+                if hasattr(access_inputs[key], 'delete') and hasattr(access_inputs[key], 'insert'):
+                    access_inputs[key].delete(0, tk.END)
+                    access_inputs[key].insert(0, str(value))
+                    # RULE: Leave everything editable
+                    try:
+                        access_inputs[key].config(state="normal")
+                    except:
+                        pass
+                elif hasattr(access_inputs[key], 'set'):
+                    # RULE: Set comboboxes via .set(value)
+                    try:
+                        access_inputs[key].set(str(value))
+                        access_inputs[key].config(state="readonly")  # Comboboxes should be readonly
+                    except:
+                        pass
+    
+    # Access notes with tags
+    if "notes" in data and "access" in data["notes"]:
+        restore_note_section_with_tags(
+            data["notes"]["access"], 
+            access_note_boxes,
+            access_note_tags,
+            add_access_note
+        )
+    
+    # Cash notes with tags
+    if "notes" in data and "cash" in data["notes"]:
+        restore_note_section_with_tags(
+            data["notes"]["cash"], 
+            cash_boxes,
+            cash_note_tags,
+            add_cash_note_box
+        )
+    
+    # Dining notes with tags
+    if "notes" in data and "dining" in data["notes"]:
+        restore_note_section_with_tags(
+            data["notes"]["dining"], 
+            dining_boxes,
+            dining_note_tags,
+            add_dining_note_box
+        )
+    
+    # Hotel notes
+    if "notes" in data and "hotel" in data["notes"]:
+        restore_note_section(
+            data["notes"]["hotel"], 
+            hotel_boxes,
+            add_hotel_note_box
+        )
+    
+    # Misc notes
+    if "notes" in data and "misc" in data["notes"]:
+        restore_note_section(
+            data["notes"]["misc"], 
+            misc_boxes,
+            add_misc_note_box
+        )
+    
+    # Memorial Union specific sections
+    if building == "Memorial Union":
+        # Carding notes
+        if "notes" in data and "carding" in data["notes"]:
+            restore_note_section(
+                data["notes"]["carding"], 
+                carding_boxes,
+                add_carding_note_box
+            )
+        
+        # Terrace notes without tags
+        if "notes" in data and "terrace" in data["notes"]:
+            restore_note_section(
+                data["notes"]["terrace"], 
+                terrace_boxes,
+                add_terrace_note_box
+            )
+        
+        # Enforcement notes with tags and images
+        if "notes" in data and "enforcement" in data["notes"]:
+            restore_enforcement_notes(data["notes"]["enforcement"])
+        
+        # Alumni notes with tags
+        if "notes" in data and "alumni" in data["notes"]:
+            restore_note_section_with_tags(
+                data["notes"]["alumni"], 
+                alumni_boxes,
+                alumni_note_tags,
+                add_alumni_note_box
+            )
+        
+        # Pier notes with tags
+        if "notes" in data and "pier" in data["notes"]:
+            restore_note_section_with_tags(
+                data["notes"]["pier"], 
+                pier_boxes,
+                pier_note_tags,
+                add_pier_note_box
+            )
+    
+    # CSC/Security data
+    if "csc" in data:
+        csc_data = data.get("csc", {})
+        for shift, shift_data in csc_data.items():
+            if shift in csc_entries:
+                for field, value in shift_data.items():
+                    if field in csc_entries[shift]:
+                        csc_entries[shift][field].delete(0, tk.END)
+                        csc_entries[shift][field].insert(0, str(value))
+                        # RULE: Leave everything editable
+                        try:
+                            csc_entries[shift][field].config(state="normal")
+                        except:
+                            pass
+
+def restore_enforcement_notes(enforcement_data):
+    """Special handler for enforcement notes with images"""
+    if not enforcement_data:
+        return
+    
+    # RULE: Never assume counts - dynamically add to match JSON
+    # Clear existing enforcement data by clearing the lists
+    enforcement_boxes.clear()
+    enforcement_note_tags.clear()
+    enforcement_images.clear()
+    
+    # RULE: Never assume counts - dynamically add entries to match JSON
+    # Restore enforcement entries
+    for i, note_entry in enumerate(enforcement_data):
+        # RULE: Be backward-compatible - use .get(...) with defaults
+        if isinstance(note_entry, dict):
+            text = note_entry.get("text", "")
+            tags = note_entry.get("tags", [])
+            image_path = note_entry.get("image_path", "")
+        else:
+            text = str(note_entry)
+            tags = []
+            image_path = ""
+        
+        if image_path:
+            # Add as image entry
+            add_enforcement_image()
+            if len(enforcement_images) > 0:
+                # RULE: Missing image files - still show filename in status label; allow reselection
+                enforcement_images[-1].set(str(image_path))
+                # Find the status label and update it to show the filename
+                # (The add_enforcement_image function will handle missing files gracefully)
+        else:
+            # Add as text note
+            add_enforcement_note_box("")
+        
+        # Set text content
+        if len(enforcement_boxes) > 0:
+            enforcement_boxes[-1].delete("1.0", tk.END)
+            enforcement_boxes[-1].insert("1.0", str(text))
+            # RULE: Leave everything editable
+            try:
+                enforcement_boxes[-1].config(state="normal")
+            except:
+                pass
+        
+        # RULE: Set comboboxes via .set(value)
+        # RULE: Tag arrays vs note counts - clamp safely
+        if len(enforcement_note_tags) > 0 and tags:
+            for j, tag in enumerate(tags):
+                if j < len(enforcement_note_tags[-1]) and tag:
+                    try:
+                        enforcement_note_tags[-1][j].set(str(tag))
+                    except:
+                        pass
+            
+            # Update add tag buttons after setting values for enforcement
+            if len(enforcement_boxes) > 0:
+                textbox = enforcement_boxes[-1]
+                note_frame = textbox.master
+                tag_frame = None
+                for child in note_frame.winfo_children():
+                    if hasattr(child, 'update_add_tag_buttons'):
+                        tag_frame = child
+                        break
+                
+                if tag_frame and hasattr(tag_frame, 'update_add_tag_buttons'):
+                    tag_frame.update_add_tag_buttons()
+
+def clear_red_gym_data():
+    """Clear Red Gym specific form data"""
+    if red_gym_building_tours_box:
+        red_gym_building_tours_box.delete("1.0", tk.END)
+        # RULE: Leave everything editable
+        try:
+            red_gym_building_tours_box.config(state="normal")
+        except:
+            pass
+    
+    if red_gym_deviations_entry:
+        red_gym_deviations_entry.delete(0, tk.END)
+        red_gym_deviations_entry.insert(0, "0")
+        # RULE: Leave everything editable
+        try:
+            red_gym_deviations_entry.config(state="normal")
+        except:
+            pass
+    
+    if red_gym_door_check_time:
+        red_gym_door_check_time.delete(0, tk.END)
+        # RULE: Leave everything editable
+        try:
+            red_gym_door_check_time.config(state="normal")
+        except:
+            pass
+    
+    if red_gym_door_check_day_type:
+        red_gym_door_check_day_type.set("")
+        # RULE: Comboboxes should remain readonly but functional
+        try:
+            red_gym_door_check_day_type.config(state="readonly")
+        except:
+            pass
+    
+    clear_note_boxes(red_gym_mail_boxes)
+    clear_note_boxes(red_gym_misc_boxes)
+
+def clear_union_data():
+    """Clear Memorial Union and Union South specific form data"""
+    clear_note_boxes(mechanical_boxes)
+    clear_note_boxes(production_boxes)
+    clear_note_boxes(patron_boxes)
+    clear_note_boxes(access_note_boxes)
+    clear_note_boxes(cash_boxes)
+    clear_note_boxes(dining_boxes)
+    clear_note_boxes(hotel_boxes)
+    clear_note_boxes(misc_boxes)
+    
+    # Clear access inputs
+    for widget in access_inputs.values():
+        if hasattr(widget, 'delete') and hasattr(widget, 'insert'):
+            widget.delete(0, tk.END)
+            # RULE: Leave everything editable
+            try:
+                widget.config(state="normal")
+            except:
+                pass
+        elif hasattr(widget, 'set'):
+            widget.set("")
+            # RULE: Comboboxes should remain readonly but functional
+            try:
+                widget.config(state="readonly")
+            except:
+                pass
+    
+    # Clear CSC data
+    for shift_data in csc_entries.values():
+        for field_widget in shift_data.values():
+            field_widget.delete(0, tk.END)
+            # RULE: Leave everything editable
+            try:
+                field_widget.config(state="normal")
+            except:
+                pass
+    
+    # Clear decibel entries
+    for time_entry, reading_entry, location_entry in decibel_entries:
+        time_entry.delete(0, tk.END)
+        reading_entry.delete(0, tk.END)
+        location_entry.delete(0, tk.END)
+        time_entry.insert(0, "Time")
+        reading_entry.insert(0, "Reading (db)")
+        location_entry.insert(0, "Location")
+        # RULE: Leave everything editable
+        try:
+            time_entry.config(state="normal")
+            reading_entry.config(state="normal")
+            location_entry.config(state="normal")
+        except:
+            pass
+    
+    # Memorial Union specific
+    if building == "Memorial Union":
+        clear_note_boxes(carding_boxes)
+        clear_note_boxes(terrace_boxes)
+        clear_note_boxes(enforcement_boxes)
+        clear_note_boxes(alumni_boxes)
+        clear_note_boxes(pier_boxes)
+
+# === Draft Save Function ===
+def save_report_draft():
+    try:
+        # Create timestamp
+        now = datetime.now()
+        timestamp = now.isoformat()
+        
+        # Build the draft data structure
+        draft_data = {
+            "timestamp": timestamp,
+            "building": building,
+            "entries": {},
+            "notes": {},
+            "decibel_readings": [],
+            "csc": {},
+            "access_inputs": {}
+        }
+        
+        # Save all entries
+        for key, entry in entries.items():
+            if hasattr(entry, 'get'):
+                draft_data["entries"][key] = entry.get()
+        
+        # Save building traffic notes
+        traffic_notes = []
+        for box in building_traffic_boxes:
+            traffic_notes.append(box.get("1.0", "end-1c"))
+        draft_data["notes"]["building_traffic"] = traffic_notes
+        
+        # Red Gym specific data
+        if building == "Red Gym":
+            # Building tours
+            if red_gym_building_tours_box:
+                draft_data["red_gym_building_tours"] = red_gym_building_tours_box.get("1.0", "end-1c")
+            
+            # Deviations
+            if red_gym_deviations_entry:
+                draft_data["red_gym_deviations_count"] = red_gym_deviations_entry.get()
+            
+            deviation_notes = []
+            for box in red_gym_deviation_boxes:
+                deviation_notes.append(box.get("1.0", "end-1c"))
+            draft_data["red_gym_deviation_notes"] = deviation_notes
+            
+            # Door check
+            if red_gym_door_check_time:
+                draft_data["red_gym_door_check_time"] = red_gym_door_check_time.get()
+            if red_gym_door_check_day_type:
+                draft_data["red_gym_door_check_day_type"] = red_gym_door_check_day_type.get()
+            
+            # Mail notes
+            mail_notes = []
+            for box in red_gym_mail_boxes:
+                mail_notes.append(box.get("1.0", "end-1c"))
+            draft_data["notes"]["red_gym_mail"] = mail_notes
+            
+            # Misc notes with tags
+            misc_notes = []
+            for i, box in enumerate(red_gym_misc_boxes):
+                note_data = {
+                    "text": box.get("1.0", "end-1c"),
+                    "tags": []
+                }
+                if i < len(misc_note_tags):
+                    note_data["tags"] = [var.get() for var in misc_note_tags[i]]
+                misc_notes.append(note_data)
+            draft_data["notes"]["red_gym_misc"] = misc_notes
+        else:
+            # Memorial Union and Union South specific data
+            
+            # Save mechanical notes with tags
+            mechanical_notes = []
+            for i, box in enumerate(mechanical_boxes):
+                note_data = {
+                    "text": box.get("1.0", "end-1c"),
+                    "tags": []
+                }
+                if i < len(mechanical_note_tags):
+                    note_data["tags"] = [var.get() for var in mechanical_note_tags[i]]
+                mechanical_notes.append(note_data)
+            draft_data["notes"]["mechanical"] = mechanical_notes
+            
+            # Save production notes with tags
+            production_notes = []
+            for i, box in enumerate(production_boxes):
+                note_data = {
+                    "text": box.get("1.0", "end-1c"),
+                    "tags": []
+                }
+                if i < len(production_note_tags):
+                    note_data["tags"] = [var.get() for var in production_note_tags[i]]
+                production_notes.append(note_data)
+            draft_data["notes"]["production"] = production_notes
+            
+            # Save decibel readings
+            for time_entry, reading_entry, location_entry in decibel_entries:
+                reading_data = {
+                    "time": time_entry.get(),
+                    "reading": reading_entry.get(),
+                    "location": location_entry.get()
+                }
+                draft_data["decibel_readings"].append(reading_data)
+            
+            # Save patron notes with tags
+            patron_notes = []
+            for i, box in enumerate(patron_boxes):
+                note_data = {
+                    "text": box.get("1.0", "end-1c"),
+                    "tags": []
+                }
+                if i < len(patron_note_tags):
+                    note_data["tags"] = [var.get() for var in patron_note_tags[i]]
+                patron_notes.append(note_data)
+            draft_data["notes"]["patron"] = patron_notes
+            
+            # Save access inputs
+            for key, widget in access_inputs.items():
+                if hasattr(widget, 'get'):
+                    draft_data["access_inputs"][key] = widget.get()
+            
+            # Save access notes with tags
+            access_notes = []
+            for i, box in enumerate(access_note_boxes):
+                note_data = {
+                    "text": box.get("1.0", "end-1c"),
+                    "tags": []
+                }
+                if i < len(access_note_tags):
+                    note_data["tags"] = [var.get() for var in access_note_tags[i]]
+                access_notes.append(note_data)
+            draft_data["notes"]["access"] = access_notes
+            
+            # Save cash notes with tags
+            cash_notes = []
+            for i, box in enumerate(cash_boxes):
+                note_data = {
+                    "text": box.get("1.0", "end-1c"),
+                    "tags": []
+                }
+                if i < len(cash_note_tags):
+                    note_data["tags"] = [var.get() for var in cash_note_tags[i]]
+                cash_notes.append(note_data)
+            draft_data["notes"]["cash"] = cash_notes
+            
+            # Save dining notes with tags
+            dining_notes = []
+            for i, box in enumerate(dining_boxes):
+                note_data = {
+                    "text": box.get("1.0", "end-1c"),
+                    "tags": []
+                }
+                if i < len(dining_note_tags):
+                    note_data["tags"] = [var.get() for var in dining_note_tags[i]]
+                dining_notes.append(note_data)
+            draft_data["notes"]["dining"] = dining_notes
+            
+            # Save hotel notes
+            hotel_notes = []
+            for box in hotel_boxes:
+                hotel_notes.append(box.get("1.0", "end-1c"))
+            draft_data["notes"]["hotel"] = hotel_notes
+            
+            # Save misc notes
+            misc_notes = []
+            for box in misc_boxes:
+                misc_notes.append(box.get("1.0", "end-1c"))
+            draft_data["notes"]["misc"] = misc_notes
+            
+            # Memorial Union specific sections
+            if building == "Memorial Union":
+                # Save carding notes
+                carding_notes = []
+                for box in carding_boxes:
+                    carding_notes.append(box.get("1.0", "end-1c"))
+                draft_data["notes"]["carding"] = carding_notes
+                
+                # Save terrace notes without tags
+                terrace_notes = []
+                for box in terrace_boxes:
+                    terrace_notes.append(box.get("1.0", "end-1c"))
+                draft_data["notes"]["terrace"] = terrace_notes
+                
+                # Save enforcement notes with tags and images
+                enforcement_notes = []
+                for i, box in enumerate(enforcement_boxes):
+                    note_data = {
+                        "text": box.get("1.0", "end-1c"),
+                        "tags": [],
+                        "image_path": ""
+                    }
+                    if i < len(enforcement_note_tags):
+                        note_data["tags"] = [var.get() for var in enforcement_note_tags[i]]
+                    if i < len(enforcement_images):
+                        note_data["image_path"] = enforcement_images[i].get()
+                    enforcement_notes.append(note_data)
+                draft_data["notes"]["enforcement"] = enforcement_notes
+                
+                # Save alumni notes with tags
+                alumni_notes = []
+                for i, box in enumerate(alumni_boxes):
+                    note_data = {
+                        "text": box.get("1.0", "end-1c"),
+                        "tags": []
+                    }
+                    if i < len(alumni_note_tags):
+                        note_data["tags"] = [var.get() for var in alumni_note_tags[i]]
+                    alumni_notes.append(note_data)
+                draft_data["notes"]["alumni"] = alumni_notes
+                
+                # Save pier notes with tags
+                pier_notes = []
+                for i, box in enumerate(pier_boxes):
+                    note_data = {
+                        "text": box.get("1.0", "end-1c"),
+                        "tags": []
+                    }
+                    if i < len(pier_note_tags):
+                        note_data["tags"] = [var.get() for var in pier_note_tags[i]]
+                    pier_notes.append(note_data)
+                draft_data["notes"]["pier"] = pier_notes
+            
+            # Save CSC/Security data
+            for shift in csc_shifts:
+                if shift in csc_entries:
+                    draft_data["csc"][shift] = {
+                        "requested": csc_entries[shift]["requested"].get(),
+                        "present": csc_entries[shift]["present"].get(),
+                        "names": csc_entries[shift]["names"].get()
+                    }
+        
+        # Create draft folder path
+        user_date = entries["date"].get()
+        parsed_date = datetime.strptime(user_date, "%A, %B %d, %Y")
+        current_year = parsed_date.strftime("%Y")
+        current_month = parsed_date.strftime("%B")
+        
+        base_dir = f"M:\\Sh_BM\\{building}\\Night Reports"
+        year_dir = os.path.join(base_dir, current_year)
+        month_dir = os.path.join(year_dir, current_month)
+        drafts_dir = os.path.join(month_dir, "drafts")
+        os.makedirs(drafts_dir, exist_ok=True)
+        
+        # Create draft filename with timestamp
+        draft_filename = f"draft_{now.strftime('%Y-%m-%d_%H-%M')}.json"
+        draft_path = os.path.join(drafts_dir, draft_filename)
+        
+        # Save the JSON file (overwrite if exists)
+        with open(draft_path, 'w', encoding='utf-8') as f:
+            json.dump(draft_data, f, indent=2, ensure_ascii=False)
+        
+        messagebox.showinfo("Draft Saved", f"Report draft saved to:\n{draft_path}")
+        
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to save draft: {str(e)}")
+
+# === Autosave Functions ===
+def start_autosave(interval_min=5):
+    """Start autosave mechanism that saves drafts every interval_min minutes"""
+    global autosave_thread, autosave_running
+    
+    # Don't start multiple autosave threads
+    if autosave_thread is not None and autosave_thread.is_alive():
+        return
+    
+    autosave_running = True
+    
+    def autosave_worker():
+        """Background worker that triggers autosave periodically"""
+        while autosave_running:
+            # Sleep for the specified interval
+            time.sleep(interval_min * 60)
+            
+            # Check if we should still be running
+            if not autosave_running:
+                break
+                
+            # Schedule save_report_draft on the main thread
+            try:
+                root.after(0, lambda: save_report_draft_silent())
+            except Exception as e:
+                print(f"Autosave error: {e}")
+    
+    # Create and start daemon thread
+    autosave_thread = threading.Thread(target=autosave_worker, daemon=True)
+    autosave_thread.start()
+
+def stop_autosave():
+    """Stop the autosave mechanism"""
+    global autosave_running
+    autosave_running = False
+
+def save_report_draft_silent():
+    """Silent version of save_report_draft for autosave (no popup messages)"""
+    try:
+        # Create timestamp
+        now = datetime.now()
+        timestamp = now.isoformat()
+        
+        # Build the draft data structure (same as save_report_draft)
+        draft_data = {
+            "timestamp": timestamp,
+            "building": building,
+            "entries": {},
+            "notes": {},
+            "decibel_readings": [],
+            "csc": {},
+            "access_inputs": {}
+        }
+        
+        # Save all entries
+        for key, entry in entries.items():
+            if hasattr(entry, 'get'):
+                draft_data["entries"][key] = entry.get()
+        
+        # Save building traffic notes
+        traffic_notes = []
+        for box in building_traffic_boxes:
+            traffic_notes.append(box.get("1.0", "end-1c"))
+        draft_data["notes"]["building_traffic"] = traffic_notes
+        
+        # Red Gym specific data
+        if building == "Red Gym":
+            # Building tours
+            if red_gym_building_tours_box:
+                draft_data["red_gym_building_tours"] = red_gym_building_tours_box.get("1.0", "end-1c")
+            
+            # Deviations
+            if red_gym_deviations_entry:
+                draft_data["red_gym_deviations_count"] = red_gym_deviations_entry.get()
+            
+            deviation_notes = []
+            for box in red_gym_deviation_boxes:
+                deviation_notes.append(box.get("1.0", "end-1c"))
+            draft_data["red_gym_deviation_notes"] = deviation_notes
+            
+            # Door check
+            if red_gym_door_check_time:
+                draft_data["red_gym_door_check_time"] = red_gym_door_check_time.get()
+            if red_gym_door_check_day_type:
+                draft_data["red_gym_door_check_day_type"] = red_gym_door_check_day_type.get()
+            
+            # Mail notes
+            mail_notes = []
+            for box in red_gym_mail_boxes:
+                mail_notes.append(box.get("1.0", "end-1c"))
+            draft_data["notes"]["red_gym_mail"] = mail_notes
+            
+            # Misc notes with tags
+            misc_notes = []
+            for i, box in enumerate(red_gym_misc_boxes):
+                note_data = {
+                    "text": box.get("1.0", "end-1c"),
+                    "tags": []
+                }
+                if i < len(misc_note_tags):
+                    note_data["tags"] = [var.get() for var in misc_note_tags[i]]
+                misc_notes.append(note_data)
+            draft_data["notes"]["red_gym_misc"] = misc_notes
+        else:
+            # Memorial Union and Union South specific data
+            
+            # Save mechanical notes with tags
+            mechanical_notes = []
+            for i, box in enumerate(mechanical_boxes):
+                note_data = {
+                    "text": box.get("1.0", "end-1c"),
+                    "tags": []
+                }
+                if i < len(mechanical_note_tags):
+                    note_data["tags"] = [var.get() for var in mechanical_note_tags[i]]
+                mechanical_notes.append(note_data)
+            draft_data["notes"]["mechanical"] = mechanical_notes
+            
+            # Save production notes with tags
+            production_notes = []
+            for i, box in enumerate(production_boxes):
+                note_data = {
+                    "text": box.get("1.0", "end-1c"),
+                    "tags": []
+                }
+                if i < len(production_note_tags):
+                    note_data["tags"] = [var.get() for var in production_note_tags[i]]
+                production_notes.append(note_data)
+            draft_data["notes"]["production"] = production_notes
+            
+            # Save decibel readings
+            for time_entry, reading_entry, location_entry in decibel_entries:
+                reading_data = {
+                    "time": time_entry.get(),
+                    "reading": reading_entry.get(),
+                    "location": location_entry.get()
+                }
+                draft_data["decibel_readings"].append(reading_data)
+            
+            # Save patron notes with tags
+            patron_notes = []
+            for i, box in enumerate(patron_boxes):
+                note_data = {
+                    "text": box.get("1.0", "end-1c"),
+                    "tags": []
+                }
+                if i < len(patron_note_tags):
+                    note_data["tags"] = [var.get() for var in patron_note_tags[i]]
+                patron_notes.append(note_data)
+            draft_data["notes"]["patron"] = patron_notes
+            
+            # Save access inputs
+            for key, widget in access_inputs.items():
+                if hasattr(widget, 'get'):
+                    draft_data["access_inputs"][key] = widget.get()
+            
+            # Save access notes with tags
+            access_notes = []
+            for i, box in enumerate(access_note_boxes):
+                note_data = {
+                    "text": box.get("1.0", "end-1c"),
+                    "tags": []
+                }
+                if i < len(access_note_tags):
+                    note_data["tags"] = [var.get() for var in access_note_tags[i]]
+                access_notes.append(note_data)
+            draft_data["notes"]["access"] = access_notes
+            
+            # Save cash notes with tags
+            cash_notes = []
+            for i, box in enumerate(cash_boxes):
+                note_data = {
+                    "text": box.get("1.0", "end-1c"),
+                    "tags": []
+                }
+                if i < len(cash_note_tags):
+                    note_data["tags"] = [var.get() for var in cash_note_tags[i]]
+                cash_notes.append(note_data)
+            draft_data["notes"]["cash"] = cash_notes
+            
+            # Save dining notes with tags
+            dining_notes = []
+            for i, box in enumerate(dining_boxes):
+                note_data = {
+                    "text": box.get("1.0", "end-1c"),
+                    "tags": []
+                }
+                if i < len(dining_note_tags):
+                    note_data["tags"] = [var.get() for var in dining_note_tags[i]]
+                dining_notes.append(note_data)
+            draft_data["notes"]["dining"] = dining_notes
+            
+            # Save hotel notes
+            hotel_notes = []
+            for box in hotel_boxes:
+                hotel_notes.append(box.get("1.0", "end-1c"))
+            draft_data["notes"]["hotel"] = hotel_notes
+            
+            # Save misc notes
+            misc_notes = []
+            for box in misc_boxes:
+                misc_notes.append(box.get("1.0", "end-1c"))
+            draft_data["notes"]["misc"] = misc_notes
+            
+            # Memorial Union specific sections
+            if building == "Memorial Union":
+                # Save carding notes
+                carding_notes = []
+                for box in carding_boxes:
+                    carding_notes.append(box.get("1.0", "end-1c"))
+                draft_data["notes"]["carding"] = carding_notes
+                
+                # Save terrace notes without tags
+                terrace_notes = []
+                for box in terrace_boxes:
+                    terrace_notes.append(box.get("1.0", "end-1c"))
+                draft_data["notes"]["terrace"] = terrace_notes
+                
+                # Save enforcement notes with tags and images
+                enforcement_notes = []
+                for i, box in enumerate(enforcement_boxes):
+                    note_data = {
+                        "text": box.get("1.0", "end-1c"),
+                        "tags": [],
+                        "image_path": ""
+                    }
+                    if i < len(enforcement_note_tags):
+                        note_data["tags"] = [var.get() for var in enforcement_note_tags[i]]
+                    if i < len(enforcement_images):
+                        note_data["image_path"] = enforcement_images[i].get()
+                    enforcement_notes.append(note_data)
+                draft_data["notes"]["enforcement"] = enforcement_notes
+                
+                # Save alumni notes with tags
+                alumni_notes = []
+                for i, box in enumerate(alumni_boxes):
+                    note_data = {
+                        "text": box.get("1.0", "end-1c"),
+                        "tags": []
+                    }
+                    if i < len(alumni_note_tags):
+                        note_data["tags"] = [var.get() for var in alumni_note_tags[i]]
+                    alumni_notes.append(note_data)
+                draft_data["notes"]["alumni"] = alumni_notes
+                
+                # Save pier notes with tags
+                pier_notes = []
+                for i, box in enumerate(pier_boxes):
+                    note_data = {
+                        "text": box.get("1.0", "end-1c"),
+                        "tags": []
+                    }
+                    if i < len(pier_note_tags):
+                        note_data["tags"] = [var.get() for var in pier_note_tags[i]]
+                    pier_notes.append(note_data)
+                draft_data["notes"]["pier"] = pier_notes
+            
+            # Save CSC/Security data
+            for shift in csc_shifts:
+                if shift in csc_entries:
+                    draft_data["csc"][shift] = {
+                        "requested": csc_entries[shift]["requested"].get(),
+                        "present": csc_entries[shift]["present"].get(),
+                        "names": csc_entries[shift]["names"].get()
+                    }
+        
+        # Create draft folder path
+        user_date = entries["date"].get()
+        parsed_date = datetime.strptime(user_date, "%A, %B %d, %Y")
+        current_year = parsed_date.strftime("%Y")
+        current_month = parsed_date.strftime("%B")
+        
+        base_dir = f"M:\\Sh_BM\\{building}\\Night Reports"
+        year_dir = os.path.join(base_dir, current_year)
+        month_dir = os.path.join(year_dir, current_month)
+        drafts_dir = os.path.join(month_dir, "drafts")
+        os.makedirs(drafts_dir, exist_ok=True)
+        
+        # Delete previous autosave files to keep only the latest one
+        try:
+            for filename in os.listdir(drafts_dir):
+                if filename.startswith("autosave_") and filename.endswith(".json"):
+                    old_autosave_path = os.path.join(drafts_dir, filename)
+                    os.remove(old_autosave_path)
+                    print(f"Deleted old autosave: {filename}")
+        except Exception as cleanup_error:
+            print(f"Warning: Could not clean up old autosave files: {cleanup_error}")
+        
+        # Create autosave filename (different from manual saves)
+        draft_filename = f"autosave_{now.strftime('%Y-%m-%d_%H-%M')}.json"
+        draft_path = os.path.join(drafts_dir, draft_filename)
+        
+        # Save the JSON file (overwrite if exists)
+        with open(draft_path, 'w', encoding='utf-8') as f:
+            json.dump(draft_data, f, indent=2, ensure_ascii=False)
+        
+        # Optional: Print to console for debugging (no popup)
+        print(f"Autosave completed: {draft_path}")
+        
+    except Exception as e:
+        # Silent error handling for autosave
+        print(f"Autosave failed: {str(e)}")
+
+# === Rename existing function ===
+def end_shift_and_generate():
+    try:
+        # Stop autosave before generating final report
+        stop_autosave()
+        
+        # Generate the report using existing logic
+        generate_report()
+        
+        # After successful generation, delete the drafts folder
+        try:
+            user_date = entries["date"].get()
+            parsed_date = datetime.strptime(user_date, "%A, %B %d, %Y")
+            current_year = parsed_date.strftime("%Y")
+            current_month = parsed_date.strftime("%B")
+            drafts_dir = os.path.join(f"M:\\Sh_BM\\{building}\\Night Reports", current_year, current_month, "drafts")
+            
+            if os.path.exists(drafts_dir):
+                import shutil
+                shutil.rmtree(drafts_dir)
+        except Exception as e:
+            # Don't fail the entire operation if draft cleanup fails
+            print(f"Warning: Could not clean up drafts folder: {e}")
+            
+    except Exception as e:
+        messagebox.showerror("Error", str(e))
+
+# === Generate Report Logic === (renamed from generate_report)
 def generate_report():
     try:
         doc = Document()
@@ -1306,6 +2914,7 @@ def generate_report():
             has_misc_notes = False
             for box in red_gym_misc_boxes:
                 content = box.get("1.0", "end").strip()
+               
                 if content:
                     has_misc_notes = True
                     add_indented_paragraph(note_counter, content)
@@ -1842,14 +3451,6 @@ def generate_report():
                         tag_counts[tag] += 1
                 # Memorial Union specific sections
                 if building == "Memorial Union":
-                    # Terrace
-                    for tag_var_list, box in zip(terrace_note_tags, terrace_boxes):
-                        content = box.get("1.0", "end").strip()
-                        if not content:
-                            continue
-                        tags = set(var.get() for var in tag_var_list if var.get() != "None")
-                        for tag in tags:
-                            tag_counts[tag] += 1
                     # Enforcement
                     for tag_var_list, box in zip(enforcement_note_tags, enforcement_boxes):
                         content = box.get("1.0", "end").strip()
@@ -1966,10 +3567,185 @@ def generate_report():
         messagebox.showerror("Error", str(e))
 
 # Wrap the initial UI setup in a function to be called after mainloop starts
+def show_startup_modal():
+    """Show initial modal to choose between creating new report or loading saved report"""
+    startup_window = tk.Toplevel()
+    startup_window.title("Night Report Generator")
+    startup_window.configure(bg="black")
+    startup_window.resizable(False, False)
+    
+    # Center the window on the screen
+    window_width = 450
+    window_height = 300
+    screen_width = startup_window.winfo_screenwidth()
+    screen_height = startup_window.winfo_screenheight()
+    x = int((screen_width / 2) - (window_width / 2))
+    y = int((screen_height / 2) - (window_height / 2))
+    startup_window.geometry(f"{window_width}x{window_height}+{x}+{y}")
+    
+    # Make it a modal dialog but don't make it transient since root is withdrawn
+    # startup_window.transient(root)  # Commented out - causes issues when root is withdrawn on macOS
+    startup_window.grab_set()
+    startup_window.lift()  # Bring window to front
+    startup_window.focus_force()  # Force focus to the window
+    
+    # macOS specific: Force window to be topmost temporarily
+    startup_window.attributes('-topmost', True)
+    startup_window.update()
+    startup_window.attributes('-topmost', False)
+    
+    # Handle window close event - exit application if startup modal is closed
+    def on_startup_close():
+        stop_autosave()  # Stop any running autosave
+        root.quit()  # Exit the mainloop
+        root.destroy()  # Destroy the root window
+    
+    startup_window.protocol("WM_DELETE_WINDOW", on_startup_close)
+    
+    # Title
+    title_label = tk.Label(
+        startup_window,
+        text="NIGHT REPORT GENERATOR",
+        font=("Helvetica", 18, "bold"),
+        fg="white",
+        bg="black"
+    )
+    title_label.pack(pady=(30, 20))
+    
+    # Subtitle
+    subtitle_label = tk.Label(
+        startup_window,
+        text="Choose an option to get started:",
+        font=("Helvetica", 12),
+        fg="white",
+        bg="black"
+    )
+    subtitle_label.pack(pady=(0, 30))
+    
+    # Button frame
+    button_frame = tk.Frame(startup_window, bg="black")
+    button_frame.pack(pady=20)
+    
+    def create_new_report():
+        startup_window.destroy()
+        select_building()
+    
+    def load_saved_report():
+        startup_window.destroy()
+        load_draft_report_startup()
+    
+    # Create New Report button
+    new_report_btn = tk.Button(
+        button_frame,
+        text="Create New Report",
+        command=create_new_report,
+        bg="white",
+        fg="black",
+        font=("Helvetica", 14, "bold"),
+        padx=20,
+        pady=10,
+        width=18
+    )
+    new_report_btn.pack(pady=10)
+    
+    # Load Saved Report button
+    load_report_btn = tk.Button(
+        button_frame,
+        text="Load Saved Report",
+        command=load_saved_report,
+        bg="white",
+        fg="black",
+        font=("Helvetica", 14, "bold"),
+        padx=20,
+        pady=10,
+        width=18
+    )
+    load_report_btn.pack(pady=10)
+    
+    # Instructions
+    instructions_label = tk.Label(
+        startup_window,
+        text="• Create New Report: Start a fresh report for your shift\n• Load Saved Report: Continue working on a previously saved draft",
+        font=("Helvetica", 10),
+        fg="gray",
+        bg="black",
+        justify=tk.LEFT
+    )
+    instructions_label.pack(pady=(20, 10))
+    
+    # Wait for this window to be destroyed before proceeding
+    root.wait_window(startup_window)
+
+def load_draft_report_startup():
+    """Special version of load_draft_report for startup flow"""
+    try:
+        # Get the file path from user
+        file_path = filedialog.askopenfilename(
+            title="Select Draft Report to Load",
+            filetypes=[
+                ("JSON files", "*.json"),
+                ("All files", "*.*")
+            ],
+            initialdir=os.path.expanduser("~/Desktop")  # Start at Desktop for startup
+        )
+        
+        if not file_path:
+            # User cancelled - show the startup modal again
+            show_startup_modal()
+            return
+        
+        # Load and validate the JSON data
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # Validate the data structure with backward compatibility
+        if not isinstance(data, dict):
+            raise ValueError("Invalid file format: not a JSON object")
+        
+        if "building" not in data:
+            raise ValueError("Invalid draft file: missing 'building' field")
+        
+        # ENHANCED: Create missing 'entries' section with sensible defaults
+        if "entries" not in data:
+            data["entries"] = {}
+        
+        # ENHANCED: Ensure 'notes' section exists with sensible defaults
+        if "notes" not in data:
+            data["notes"] = {}
+        
+        # Set the global building variable from the loaded data
+        global building, loaded_from_draft
+        building = data["building"]
+        loaded_from_draft = True
+        
+        # Update window title with loaded building
+        root.title(f"{building} - Night Report Generator")
+        
+        # Configure tabs for the loaded building
+        configure_tabs_for_building()
+        
+        # Populate the form with the loaded data
+        populate_form_from_data(data)
+        
+        # Show success message
+        messagebox.showinfo("Success", "Report loaded successfully!")
+        
+    except FileNotFoundError:
+        messagebox.showerror("Load Error", "The selected draft file could not be found.")
+        show_startup_modal()
+    except json.JSONDecodeError as e:
+        messagebox.showerror("Load Error", f"Invalid JSON file: {str(e)}")
+        show_startup_modal()
+    except ValueError as e:
+        messagebox.showerror("Load Error", str(e))
+        show_startup_modal()
+    except Exception as e:
+        messagebox.showerror("Load Error", str(e))
+        show_startup_modal()
+
 def start_app():
-    select_building()
+    show_startup_modal()
 
 # Schedule the app start after the mainloop starts
 root.after(0, start_app)
-
 root.mainloop()
